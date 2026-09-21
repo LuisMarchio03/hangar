@@ -2353,6 +2353,15 @@ export function getRunPane(name: string): Promise<{ pane: string }> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/run/pane`);
 }
 
+/** Atalho "shell" da fileira: dispara-e-esquece no cwd da sessão. O 202 só diz que o processo
+ * nasceu — falha depois disso não volta por aqui (comando com saída que interessa vai no run). */
+export function runShortcutShell(name: string, command: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/shortcut-shell`, {
+    method: 'POST',
+    body: JSON.stringify({ command }),
+  });
+}
+
 // Limites de uso da conta Codex (Task B) — so sessoes Codex; o back devolve 400 pra Claude.
 export function getLimits(name: string): Promise<SessionLimits> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/limits`);
