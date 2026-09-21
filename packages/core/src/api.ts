@@ -30,6 +30,7 @@ import type {
   ResumeResult,
   RunnersResponse,
   RunInfo,
+  Runner,
   SessionLimits,
   CodexModelsResponse,
   PiModelsResponse,
@@ -2347,6 +2348,17 @@ export function startRun(name: string, command: string): Promise<RunInfo> {
 
 export function stopRun(name: string): Promise<{ ok: boolean }> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/run/stop`, { method: 'POST' });
+}
+
+/** Grava a lista INTEIRA de comandos personalizados do projeto (add/editar/remover são a mesma
+ * operação). Devolve a lista como o servidor a leu. */
+export function setCustomRunners(
+  name: string, commands: { label: string; command: string }[],
+): Promise<Runner[]> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/runners/custom`, {
+    method: 'POST',
+    body: JSON.stringify({ commands }),
+  });
 }
 
 export function getRunPane(name: string): Promise<{ pane: string }> {

@@ -532,7 +532,7 @@ class CostReport(BaseModel):
 class Runner(BaseModel):
     label: str
     command: str
-    source: Literal["npm", "make", "stack"] = "npm"
+    source: Literal["npm", "make", "stack", "custom"] = "npm"
     is_dev_guess: bool = False
 
 
@@ -561,12 +561,22 @@ class ProjectStatus(BaseModel):
 
 class RunnersResponse(BaseModel):
     detected: list[Runner]
+    custom: list[Runner] = []
     remembered: Optional[str] = None
     running: Optional[RunInfo] = None
 
 
 class RunBody(BaseModel):
     command: str
+
+
+class CustomRunner(BaseModel):
+    label: str
+    command: str
+
+
+class CustomRunnersBody(BaseModel):
+    commands: list[CustomRunner]
 
 
 class ShortcutShellBody(BaseModel):
