@@ -567,3 +567,7 @@ class RunnersResponse(BaseModel):
 
 class RunBody(BaseModel):
     command: str
+
+
+class ShortcutShellBody(BaseModel):
+    command: str

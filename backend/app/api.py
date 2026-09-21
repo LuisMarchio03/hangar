@@ -51,7 +51,7 @@ from app import registry as registry_mod
 from app.registry import KillFailed, SessionRegistry, sanitize_cwd
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, ChatEvent, CostReport, UsoReport, RunnersResponse, RunBody,
-                        RunInfo, ProjectStatus, session_key)
+                        RunInfo, ProjectStatus, ShortcutShellBody, session_key)
 from app import uso_report
 from app.planprog import (plan_progress, list_plans, write_pin, is_safe_stem, _plans_dir,
                           PlanPinError, PIN_NONE, marcar_step, arquivar, caminho_do_plano,
@@ -5869,6 +5869,25 @@ def stop_runner(name: str):
 @app.get("/api/sessions/{name}/run/pane", dependencies=[Depends(require_auth)])
 def runner_pane(name: str):
     return {"pane": runner.run_pane(_session_cwd(name))}
+
+
+@app.post("/api/sessions/{name}/shortcut-shell", dependencies=[Depends(require_auth)],
+          status_code=202)
+def shortcut_shell(name: str, body: ShortcutShellBody):
+    # Atalho "abrir programa" da fileira: dispara-e-esquece no cwd da sessao. Sem pane, sem
+    # captura de saida — comando cuja saida interessa tem casa melhor (o run ou o terminal).
+    # start_new_session desprende o filho: matar/reiniciar o backend nao leva o programa junto.
+    cwd = _session_cwd(name)
+    comando = body.command.strip()
+    if not comando:
+        raise HTTPException(400, detail=erro("erro_shortcut_vazio", "comando vazio"))
+    try:
+        subprocess.Popen(comando, shell=True, cwd=cwd, start_new_session=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+    except OSError as e:
+        raise HTTPException(500, detail=erro("erro_shortcut_shell", str(e)))
+    return {"ok": True}
 
 
 # --- launcher de projetos (standalone, chaveado pelo projects.json — nao por sessao viva) ----
