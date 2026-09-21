@@ -16,7 +16,7 @@ export interface ShortcutSendText {
   id: string;
   type: 'send_text';
   label: string;
-  icon?: string;          // "emoji:🚀" ou "glifo:<nome do ShortcutIcon>"
+  icon?: string;          // "emoji:🚀" ou "glifo:bolt" (chave do mapa do ShortcutIcon)
   text: string;           // texto completo a enviar (ex.: "/relatorio-pm" ou um prompt)
   send_direct?: boolean;  // ausente = true; false pré-preenche o composer
   confirm?: boolean;

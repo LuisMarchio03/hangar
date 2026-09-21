@@ -411,7 +411,9 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
   {#if hasActions && ctxPanel.aba !== 'navegador'}
     <!-- Clique-direito abre o editor de atalhos: a fileira é configurável e o caminho de edição
          mora na config — este é o acesso rápido de quem já está olhando pra ela. -->
-    <div class="ctx-actions" role="toolbar" aria-label={m.ctx_painel_titulo()}
+    <!-- tabindex -1: o contextmenu torna a toolbar "interativa" pro linter a11y, mas o foco de
+         teclado pertence aos botões dela — a toolbar em si não é parada de Tab. -->
+    <div class="ctx-actions" role="toolbar" aria-label={m.ctx_painel_titulo()} tabindex="-1"
          oncontextmenu={onEditShortcuts ? (e) => { e.preventDefault(); onEditShortcuts(); } : undefined}>
       {#each atalhosVisiveis as s (s.id)}
         {#if s.type === 'internal' && s.action === 'terminal'}

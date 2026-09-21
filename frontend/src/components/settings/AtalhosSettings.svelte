@@ -82,8 +82,8 @@
     rodar: m.ctx_rodar,
   };
   const INTERNO_GLIFO: Record<ShortcutInternalAction, string> = {
-    terminal: 'glifo:terminal', modo: 'glifo:git', navegador: 'glifo:globo',
-    anexos: 'glifo:pasta', rodar: 'glifo:play',
+    terminal: 'glifo:terminal', modo: 'glifo:git', navegador: 'glifo:globe',
+    anexos: 'glifo:folder', rodar: 'glifo:play',
   };
   const nativosAusentes = $derived(
     (Object.keys(INTERNO_ROTULO) as ShortcutInternalAction[]).filter(
@@ -133,7 +133,7 @@
   let editando = $state<number | null>(null);   // índice na lista; null = novo
   let fTipo = $state<'send_text' | 'shell'>('send_text');
   let fRotulo = $state('');
-  let fGlifo = $state('raio');
+  let fGlifo = $state('bolt');
   let fEmoji = $state('');
   let fConteudo = $state('');
   let fSendDirect = $state(true);
@@ -141,7 +141,7 @@
 
   function abrirNovo() {
     editando = null;
-    fTipo = 'send_text'; fRotulo = ''; fGlifo = 'raio'; fEmoji = '';
+    fTipo = 'send_text'; fRotulo = ''; fGlifo = 'bolt'; fEmoji = '';
     fConteudo = ''; fSendDirect = true; fConfirm = false;
     formAberto = true;
   }
@@ -154,8 +154,8 @@
     fConteudo = s.type === 'shell' ? s.command : s.text;
     fSendDirect = s.type === 'send_text' ? s.send_direct !== false : true;
     fConfirm = s.confirm === true;
-    if (s.icon?.startsWith('emoji:')) { fEmoji = s.icon.slice(6); fGlifo = 'raio'; }
-    else { fEmoji = ''; fGlifo = s.icon?.startsWith('glifo:') ? s.icon.slice(6) : 'raio'; }
+    if (s.icon?.startsWith('emoji:')) { fEmoji = s.icon.slice(6); fGlifo = 'bolt'; }
+    else { fEmoji = ''; fGlifo = s.icon?.startsWith('glifo:') ? s.icon.slice(6) : 'bolt'; }
     formAberto = true;
   }
   const formValido = $derived(!!fRotulo.trim() && !!fConteudo.trim());
