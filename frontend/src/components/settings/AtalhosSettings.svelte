@@ -97,6 +97,28 @@
     lista = nova;
     sujo = true;
   }
+
+  // ── Arrastar pra reordenar. HTML5 DnD não responde ao toque em tablet (regra do repo), então
+  // os botões ↑/↓ ficam — são a alternativa exigida pela WCAG 2.2 SC 2.5.7, não redundância. ──
+  let dragIdx = $state<number | null>(null);
+  function dragStart(e: DragEvent, i: number) {
+    dragIdx = i;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(i));
+    }
+  }
+  function dragOver(e: DragEvent, i: number) {
+    e.preventDefault();       // sem isto o drop é recusado e o arrasto "volta"
+    if (dragIdx === null || dragIdx === i) return;
+    const nova = [...lista];
+    const [item] = nova.splice(dragIdx, 1);
+    nova.splice(i, 0, item);
+    lista = nova;
+    dragIdx = i;
+    sujo = true;
+  }
+  function dragEnd() { dragIdx = null; }
   function remover(i: number) {
     lista = lista.filter((_, k) => k !== i);
     sujo = true;
@@ -186,7 +208,10 @@
     {/if}
     <ul class="linhas">
       {#each lista as s, i (s.id)}
-        <li class="linha">
+        <li class="linha" class:arrastando={dragIdx === i} draggable="true"
+            ondragstart={(e) => dragStart(e, i)} ondragover={(e) => dragOver(e, i)}
+            ondragend={dragEnd}>
+          <span class="alca" aria-hidden="true">⠿</span>
           <span class="ico"><ShortcutIcon icon={s.type === 'internal' ? INTERNO_GLIFO[s.action] : s.icon} /></span>
           <span class="txt">
             <span class="rotulo">{s.type === 'internal' ? INTERNO_ROTULO[s.action]() : s.label}</span>
@@ -299,6 +324,8 @@
     padding: var(--space-2); border-radius: var(--radius-md);
     background: var(--surface-inset);
   }
+  .linha.arrastando { opacity: 0.45; }
+  .alca { flex-shrink: 0; color: var(--text-muted); cursor: grab; font-size: var(--text-sm); user-select: none; }
   .ico {
     width: 32px; height: 32px; flex-shrink: 0;
     display: inline-flex; align-items: center; justify-content: center;
