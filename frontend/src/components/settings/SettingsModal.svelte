@@ -5,6 +5,7 @@
   import AppearanceSettings from './AppearanceSettings.svelte';
   import VozSettings from './VozSettings.svelte';
   import ServerSettings from './ServerSettings.svelte';
+  import AtalhosSettings from './AtalhosSettings.svelte';
   import SobreSettings from './SobreSettings.svelte';
   import DiarioSettings from './DiarioSettings.svelte';
   import MaquinasSettings from './MaquinasSettings.svelte';
@@ -110,6 +111,7 @@
     { id: 'voz', secao: 'servidor', rotulo: m.voz_titulo(), icone: 'mic', servidor: true },
     { id: 'notificacoes', secao: 'servidor', rotulo: m.config_modal_notificacoes(), icone: 'sino', servidor: true },
     { id: 'anexos', secao: 'servidor', rotulo: m.config_modal_anexos_curto(), icone: 'clipe', servidor: true },
+    { id: 'atalhos', secao: 'servidor', rotulo: m.lista_atalhos(), icone: 'raio', servidor: true },
     { id: 'avancado', secao: 'servidor', rotulo: m.config_modal_avancado(), icone: 'chave', servidor: true },
     { id: 'orquestracao', secao: 'servidor', rotulo: m.config_modal_orquestracao(), icone: 'sliders', servidor: true },
   ] satisfies readonly { id: TelaConfig; secao: string; rotulo: string; icone: string; servidor: boolean }[];
@@ -392,6 +394,8 @@
     <HarnessSettings apiTarget={alvo} {store} />
   {:else if telaAtual === 'voz'}
     <VozSettings {store} />
+  {:else if telaAtual === 'atalhos'}
+    <AtalhosSettings apiTarget={alvo} />
   {:else}
     <ServerSettings {store} secao={telaAtual} apiTarget={alvo} />
   {/if}
