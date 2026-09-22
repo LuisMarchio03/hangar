@@ -316,6 +316,8 @@ def main() -> int:
                     help="nivel de raciocinio; vira sobrescrita de config, nao flag")
     ap.add_argument("--codex-home", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--codex-account", default="default", help=argparse.SUPPRESS)
+    ap.add_argument("--approval-policy", choices=("never", "on-request"), default=None)
+    ap.add_argument("--sandbox", choices=("read-only", "workspace-write", "danger-full-access"), default=None)
     args = ap.parse_args()
     if not args.name:
         print("hangar-codex-tui: --name (ou CP_SESSION_NAME) e obrigatorio", file=sys.stderr)
@@ -331,6 +333,8 @@ def main() -> int:
     sys.path.insert(0, str(_REPO / "backend"))
     from app.adapters.codex import sessions as codex_sessions
     from app.adapters.codex.lancador import APPROVAL, SANDBOX
+    approval = args.approval_policy or APPROVAL
+    sandbox = args.sandbox or SANDBOX
     from app import codex_contas
     from app.codex_instrucoes import (LIMITE_INSTRUCOES, limite_instrucoes,
                                       preparar_instrucoes, preparar_projeto)
@@ -406,7 +410,7 @@ def main() -> int:
                 # Sandbox e aprovacao tambem no SERVIDOR: o thread/resume que a TUI faz ao reconectar
                 # nao repassa as flags dela, e a conversa caia em `Workspace` com aprovacao.
                 [_codex(), "app-server", "--listen", endpoint, "-c", f"project_doc_max_bytes={limite}",
-                 "-c", f'sandbox_mode="{SANDBOX}"', "-c", f'approval_policy="{APPROVAL}"'],
+                 "-c", f'sandbox_mode="{sandbox}"', "-c", f'approval_policy="{approval}"'],
                 stdout=subprocess.DEVNULL, stderr=erros,
             )
         except (OSError, SystemExit) as exc:
@@ -424,7 +428,13 @@ def main() -> int:
         # (o `-m` da TUI) e a pill mostrava vazio — o ramo `_conectar` do sidecar com endpoint so
         # conecta, entao o `default_model` da thread nunca chega a ser lido.
         if previous_thread is None:
-            codex_sessions.save(args.name, thread_id, rollout, cwd,
+            existing = codex_sessions.load(args.name)
+            if existing and existing.get("key") and existing.get("thread_id") == args.resume == thread_id:
+                codex_sessions.update(args.name, headless=False, cano=None,
+                                      endpoint=endpoint, app_pid=servidor.pid, launcher_pid=os.getpid(),
+                                      model=args.model, effort=args.effort, rollout_path=rollout)
+            else:
+                codex_sessions.save(args.name, thread_id, rollout, cwd,
                                 model=args.model, effort=args.effort,
                                 endpoint=endpoint, app_pid=servidor.pid,
                                 codex_home=str(codex_home),
@@ -486,7 +496,7 @@ def main() -> int:
                 *flags_da_escolha, args.resume]
     else:
         argv = [_codex(), "--remote", endpoint, "--no-alt-screen", "-C", cwd,
-                "--sandbox", SANDBOX, "--ask-for-approval", APPROVAL, *flags_da_escolha]
+                "--sandbox", sandbox, "--ask-for-approval", approval, *flags_da_escolha]
     if args.prompt:
         argv.append(args.prompt)
     try:
@@ -496,6 +506,7 @@ def main() -> int:
         if not _esperar_porta(endpoint, servidor, erros, _ESPERA_THREAD):
             return 1
         tui = subprocess.Popen(argv)
+        codex_sessions.update(args.name, tui_pid=tui.pid)
         # O servidor pode morrer com a TUI viva (SIGTERM alheio, crash). A TUI `--remote` tenta
         # reconectar por ~1 min e depois desiste PRA SEMPRE — nem mensagem nova a acorda. Subir
         # outro na MESMA porta dentro dessa janela faz ela retomar a thread sozinha, sem relançar

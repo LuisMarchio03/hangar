@@ -33,7 +33,8 @@ def comando_do_lancador(cwd: str, initial_prompt: str | None = None,
                         thread_id: str | None = None, model: str | None = None,
                         effort: str | None = None,
                         codex_home: str | None = None,
-                        codex_account: str | None = None) -> list[str]:
+                        codex_account: str | None = None,
+                        approval: str | None = None, sandbox: str | None = None) -> list[str]:
     """O comando do pane de uma sessao Codex: o lancador unico, o MESMO nos tres chamadores.
 
     O nome da sessao nao entra aqui — `tmux new-session` carimba CP_SESSION_NAME no pane e o
@@ -57,6 +58,10 @@ def comando_do_lancador(cwd: str, initial_prompt: str | None = None,
         argv += ["--model", model]
     if effort:
         argv += ["--effort", effort]
+    if approval:
+        argv += ["--approval-policy", approval]
+    if sandbox:
+        argv += ["--sandbox", sandbox]
     if initial_prompt:
         argv += ["--prompt", initial_prompt]
     return argv

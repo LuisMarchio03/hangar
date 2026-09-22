@@ -659,7 +659,8 @@ def test_codex_modo_e_skills_usam_adapter_nativo(api_client):
         assert api_client.post("/api/sessions/cx/codex/mode", headers=_h(), json={"mode": "bypassPermissions"}).status_code == 422
         skills = api_client.get("/api/sessions/cx/commands", headers=_h()).json()
     fake.set_mode.assert_awaited_once_with("cx", "plan")
-    assert skills == [{"name": "revisar", "display": "/revisar", "source": "skill"}]
+    assert skills[0]["name"] == "compact" and skills[0]["source"] == "builtin"
+    assert skills[1:] == [{"name": "revisar", "display": "/revisar", "source": "skill"}]
 
 
 def test_codex_orientar_texto_ou_fila_com_falha_visivel(api_client):

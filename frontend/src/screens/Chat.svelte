@@ -899,8 +899,8 @@
   // Com stream, só ele: depois de trocar de modo a lista ainda diz o modo antigo por um poll.
   const sessionHeadless = $derived(stateEvent ? stateEvent.headless === true
     : allSessions.find((s) => s.name === sessionName)?.headless === true);
-  // Troca terminal ⇄ sem terminal: só Claude e só parada (o backend confere de novo e dá 409).
-  const modoTrocavel = $derived(sessionProvider === 'claude');
+  // Codex oferece a ida ao terminal; a volta continua exclusiva do Claude.
+  const modoTrocavel = $derived(sessionProvider === 'claude' || (sessionProvider === 'codex' && sessionHeadless));
   let trocandoModo = $state(false);
   // A troca reinicia o processo da sessão e muda onde ela vive; um clique no botão errado ("Abrir
   // no terminal" ao lado de Navegador/Rodar) fazia isso sem aviso. Confirma antes, dizendo o quê.
@@ -2463,6 +2463,10 @@
 
   async function handleSend(text: string, steer = false, onlyThisSession = false) {
     if (abrirBtwSe(text)) return;
+    if (isCodex && /^\/compact(?:\s|$)/.test(text.trim())) {
+      await sendInput(sessionName, text);
+      return;
+    }
     // Eco imediato SEMPRE (não só em 'working'): o transcript só grava a msg quando o TURNO dela
     // começa — sessão ocupada num turno longo deixava a msg invisível por minutos, e a corrida de
     // estado (flip idle->working no instante do envio) derrubava até o eco condicional antigo
@@ -2829,7 +2833,7 @@
       onRecarregar={recarregar}
       recarregarBloqueado={currentState !== 'idle' || recarregando}
       onAbrirArquivo={nested ? undefined : (p) => void filesStore.abrir(p)}
-      onCompactar={sessionProvider === 'claude' && currentState !== 'dead'
+      onCompactar={(sessionProvider === 'claude' || isCodex) && currentState !== 'dead'
         ? () => void composerRef?.preencherComando('compact') : undefined}
       onPassarBastao={nested ? undefined : passarBastaoDaqui}
       session={planSession}

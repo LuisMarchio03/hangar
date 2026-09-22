@@ -420,7 +420,8 @@ def test_timeout_guarda_so_ultima_cauda_privada(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="o lancador so e usado em pane POSIX por ora")
-def test_lancador_retoma_a_conversa_pedida(tmp_path):
+@pytest.mark.parametrize("restricted", [False, True])
+def test_lancador_retoma_a_conversa_pedida(tmp_path, restricted):
     """`--resume` troca o comando da TUI por `codex resume <id>`. Sem `-C`: a conversa carrega o cwd
     dela, e o pane ja nasce la."""
     cwd = tmp_path / "proj"
@@ -430,7 +431,8 @@ def test_lancador_retoma_a_conversa_pedida(tmp_path):
     env["FAKE_SERVER_OUT"] = str(tmp_path / "server-argv.json")
     proc = subprocess.Popen(
         [sys.executable, str(_LANCADOR), "--name", "sess", "--cwd", str(cwd),
-         "--resume", "01a052d1-3e59-7441-9ed3-6bbd9e2704fc"],
+         "--resume", "01a052d1-3e59-7441-9ed3-6bbd9e2704fc",
+         *(["--approval-policy", "on-request", "--sandbox", "read-only"] if restricted else [])],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     proc.wait(timeout=30)
@@ -445,8 +447,9 @@ def test_lancador_retoma_a_conversa_pedida(tmp_path):
     assert "--ask-for-approval" not in argv
     server_argv = json.loads((tmp_path / "server-argv.json").read_text())
     configs = [server_argv[i + 1] for i, arg in enumerate(server_argv[:-1]) if arg == "-c"]
-    assert 'sandbox_mode="danger-full-access"' in configs
-    assert 'approval_policy="never"' in configs
+    sandbox, approval = ("read-only", "on-request") if restricted else ("danger-full-access", "never")
+    assert f'sandbox_mode="{sandbox}"' in configs
+    assert f'approval_policy="{approval}"' in configs
 
 
 @pytest.mark.parametrize("resume", [False, True])

@@ -2255,6 +2255,23 @@ async def modo_execucao(name: str, body: ModoExecucaoBody):
     info = await _cached_info(name)
     if not info:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessão não encontrada"))
+    if info.provider == "codex":
+        if not body.terminal:
+            raise HTTPException(409, detail=erro("erro_troca_modo", "O Codex ainda não oferece a volta para sem terminal.", erro="operação indisponível"))
+        if not info.headless:
+            return {"ok": True, "terminal": True}
+        codex = get_adapter("codex")
+        async with codex.delivery_lock(name):
+            task = asyncio.create_task(codex.open_terminal(name))
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                await task
+                raise
+            except Exception as exc:
+                raise HTTPException(409, detail=erro("erro_troca_modo", f"não troquei de modo: {exc}", erro=str(exc))) from exc
+        registry._forget(name)
+        return {"ok": True, "terminal": True}
     if info.provider != "claude":
         raise HTTPException(409, detail=erro("erro_modo_so_claude", "a troca de modo só vale para sessões Claude"))
     headless = _headless(name)
@@ -3416,6 +3433,15 @@ async def _send_one_codex_locked(name: str, text: str, *, track_entry: bool = Fa
     IMPORTANT 2: PromptQueue.append/set_delivered fazem I/O de arquivo sincrono com lock -- chamados
     direto aqui (corrotina) bloqueariam o event loop. O pool de envio evita disputar com funcionalidades secundárias."""
     adapter = get_adapter(chave)
+    if chave == "codex" and text.strip().split(maxsplit=1)[0:1] == ["/compact"]:
+        try:
+            if text.strip() != "/compact":
+                raise ValueError("O /compact do Codex não aceita argumentos.")
+            await adapter.compact(name)
+        except Exception as exc:
+            _log.warning("codex: compactação recusada name=%s: %s", name, exc)
+            return {"ok": False, "error": erro("erro_envio_falhou", str(exc), erro=str(exc))}
+        return {"ok": True, "error": None, "delivered": True}
     try:
         deliverable = await adapter.deliverable(name)
     except Exception:
@@ -7552,8 +7578,11 @@ def navegador_da_sessao(name: str):
 async def commands(name: str):
     if _provider_of(name) == "codex":
         try:
-            return [{k: v for k, v in s.items() if k not in {"path", "native_name"}}
-                    for s in await get_adapter("codex").list_skills(name)]
+            return [{"name": "compact", "display": "/compact", "source": "builtin",
+                     "description": "Resume e compacta o contexto", "destructive": True},
+                    *[{k: v for k, v in s.items() if k not in {"path", "native_name"}}
+                      for s in await get_adapter("codex").list_skills(name)
+                      if s["name"] != "compact"]]
         except RuntimeError:
             raise HTTPException(409, detail=erro("erro_codex_controle", "O Codex não aceitou a alteração; atualize a sessão e tente novamente.")) from None
     return await asyncio.to_thread(_commands_claude, name)

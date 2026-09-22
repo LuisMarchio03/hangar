@@ -979,7 +979,6 @@ async def test_subscription_retries_until_rollout_exists():
     assert client.left == 0                      # retentou ate o rollout existir
     assert ("thread/resume", {
         "threadId": "thread-1", "cwd": "/tmp/proj",
-        "sandbox": codex_adapter.SANDBOX, "approvalPolicy": codex_adapter.APPROVAL,
     }) in client.requests
 
 
