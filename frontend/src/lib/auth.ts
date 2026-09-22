@@ -179,6 +179,9 @@ export function addServer(
   baseUrl: string,
   token: string,
   label?: string,
+  // `ativar: false` = cadastro pela tela de Servidores: entra na lista sem virar o servidor
+  // ativo — o app não pode pular pra máquina nova no meio da configuração de outra.
+  { ativar = true }: { ativar?: boolean } = {},
 ): { id: string; existed: boolean } {
   baseUrl = normalizeBaseUrl(baseUrl);
   const norm = (u: string) => u.replace(/\/+$/, '');
@@ -196,7 +199,7 @@ export function addServer(
     list.push({ id, label: label ?? labelFor(baseUrl), baseUrl, token });
   }
   writeServers(list);
-  localStorage.setItem(ACTIVE_KEY, id);
+  if (ativar || !localStorage.getItem(ACTIVE_KEY)) localStorage.setItem(ACTIVE_KEY, id);
   cookieDaOrigem();
   notifyChanged();
   return { id, existed };

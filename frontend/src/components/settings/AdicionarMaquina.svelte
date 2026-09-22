@@ -114,7 +114,7 @@
     // página matava esse envio no meio — ao voltar, o hub (sem a máquina nova) mandava e ela
     // sumia. Quem precisa reagir escuta `onServersChanged`; a tela de máquinas recarrega por
     // `onAdicionada`.
-    if (!soRecado) addServer(base, tok);
+    if (!soRecado) addServer(base, tok, undefined, { ativar: false });
     ocupado = false;
     onAdicionada?.();
     onFechar();

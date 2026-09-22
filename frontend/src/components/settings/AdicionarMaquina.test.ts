@@ -54,7 +54,7 @@ describe('AdicionarMaquina', () => {
     t.botao(m.maquinas_add_testar()).click();
     await tick(); await tick();
     expect(getConfigForServer).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://192.168.0.10:8765', token: 'abc' }));
-    expect(addServer).toHaveBeenCalledWith('http://192.168.0.10:8765', 'abc');
+    expect(addServer).toHaveBeenCalledWith('http://192.168.0.10:8765', 'abc', undefined, { ativar: false });
     expect(t.onFechar).toHaveBeenCalled();
     unmount(t.comp);
   });
@@ -140,7 +140,7 @@ describe('AdicionarMaquina', () => {
     botaoTestar.click();
     await tick(); await tick();
     expect(getConfigForServer).toHaveBeenCalledTimes(2);
-    expect(addServer).toHaveBeenCalledWith('http://192.168.0.10:8765', 'abc');
+    expect(addServer).toHaveBeenCalledWith('http://192.168.0.10:8765', 'abc', undefined, { ativar: false });
     unmount(t.comp);
   });
 
@@ -168,7 +168,7 @@ describe('AdicionarMaquina', () => {
     expect(getConfigForServer).toHaveBeenCalledTimes(2);
     expect(getConfigForServer.mock.calls[0][0]).toMatchObject({ baseUrl: 'https://notebook.casa.lan' });
     expect(getConfigForServer.mock.calls[1][0]).toMatchObject({ baseUrl: 'http://notebook.casa.lan:8765' });
-    expect(addServer).toHaveBeenCalledWith('http://notebook.casa.lan:8765', 'abc');
+    expect(addServer).toHaveBeenCalledWith('http://notebook.casa.lan:8765', 'abc', undefined, { ativar: false });
     unmount(t.comp);
   });
 
@@ -209,7 +209,7 @@ describe('AdicionarMaquina — servidores se falam', () => {
     await tick(); await tick(); await tick(); await tick();
     expect(getIdentificador).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://192.168.0.10:8765', token: 'abc' }));
     expect(registrarPeerDoisLados).toHaveBeenCalledWith(ALVO, { id: 'notebook', base_url: 'http://192.168.0.10:8765', token: 'abc' });
-    expect(addServer).toHaveBeenCalledWith('http://192.168.0.10:8765', 'abc');
+    expect(addServer).toHaveBeenCalledWith('http://192.168.0.10:8765', 'abc', undefined, { ativar: false });
     unmount(t.comp);
   });
 
