@@ -2250,19 +2250,17 @@ async def recarregar_sessao(name: str):
 
 @app.post("/api/sessions/{name}/modo-execucao", dependencies=[Depends(require_auth)])
 async def modo_execucao(name: str, body: ModoExecucaoBody):
-    """Troca uma sessão Claude entre terminal (pane tmux) e sem terminal, na mesma conversa.
+    """Troca uma sessão entre terminal (pane tmux) e sem terminal, na mesma conversa.
     Só ociosa; o processo novo sobe já no clique, pra a primeira mensagem não pagar a largada."""
     info = await _cached_info(name)
     if not info:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessão não encontrada"))
     if info.provider == "codex":
-        if not body.terminal:
-            raise HTTPException(409, detail=erro("erro_troca_modo", "O Codex ainda não oferece a volta para sem terminal.", erro="operação indisponível"))
-        if not info.headless:
-            return {"ok": True, "terminal": True}
+        if info.headless != body.terminal:
+            return {"ok": True, "terminal": body.terminal}
         codex = get_adapter("codex")
         async with codex.delivery_lock(name):
-            task = asyncio.create_task(codex.open_terminal(name))
+            task = asyncio.create_task(codex.open_terminal(name) if body.terminal else codex.open_headless(name))
             try:
                 await asyncio.shield(task)
             except asyncio.CancelledError:
@@ -2271,7 +2269,7 @@ async def modo_execucao(name: str, body: ModoExecucaoBody):
             except Exception as exc:
                 raise HTTPException(409, detail=erro("erro_troca_modo", f"não troquei de modo: {exc}", erro=str(exc))) from exc
         registry._forget(name)
-        return {"ok": True, "terminal": True}
+        return {"ok": True, "terminal": body.terminal}
     if info.provider != "claude":
         raise HTTPException(409, detail=erro("erro_modo_so_claude", "a troca de modo só vale para sessões Claude"))
     headless = _headless(name)

@@ -5,9 +5,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
-- **Codex: `/compact` chama `thread/compact/start`, fora da fila de prompts.** A ida de sem
-  terminal para terminal preserva a thread e suas escolhas; só confirma quando a TUI carregou
-  a conversa. Assinar eventos com `thread/resume` não sobrescreve sandbox nem aprovação.
+- **Codex: `/compact` chama `thread/compact/start`, fora da fila de prompts.** A troca entre
+  terminal e sem terminal preserva a thread e suas escolhas; só confirma quando o destino
+  carregou a conversa. Assinar eventos com `thread/resume` não sobrescreve sandbox nem aprovação.
 
 - **`omp` é um FORK do Pi** — mesmo JSONL, mesmas extensões, e as diferenças pequenas já custaram
   bugs calados (binário próprio, raiz `~/.omp/agent`, sem `--session-id`, outros nomes de evento,
@@ -165,7 +165,9 @@ Codex lembrou o marcador enviado antes da troca. A tela passou a mostrar “Term
 A assinatura de eventos não pode impor Full Access: isso desfazia a permissão preservada pelo
 lançador. Monitor de estado e prévia também precisam sobreviver à troca do cliente. Falha ao
 abrir o pane restaura o sidecar e o processo sem terminal; thread sem rollout é recusada antes
-de encerrar o processo original. A volta do terminal para sem terminal continua exclusiva do Claude.
+de encerrar o processo original. A volta para sem terminal lê a política vigente na thread, cancela
+o observador do pane antes de fechá-lo e confirma a saída dos processos antes de iniciar o cano.
+Se o cano falhar, o terminal é restaurado; processo que não encerra impede a abertura de outro.
 
 ## Erro de leitura tratado como erro de linha trava o backend inteiro
 

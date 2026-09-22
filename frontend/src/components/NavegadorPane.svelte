@@ -22,7 +22,7 @@
   // Overlays DOM (sheet/modal/visor de mídia) abrem POR BAIXO do view nativo — com um aberto, o
   // view se esconde (bounds zero). O seletor é o canônico do app (Composer/DesktopShell usam o
   // mesmo) + .bp-wrap do visor; os dois teleportam pro body.
-  const SELETOR_OVERLAY = '[role="dialog"]:not(.board-overlay), .bp-wrap';
+  const SELETOR_OVERLAY = '[role="dialog"]:not(.board-overlay), [role="alertdialog"], .bp-wrap';
   let ancora = $state<HTMLDivElement | null>(null);
   // O painel é remontado por sessão (o Chat tem key por sessão), então o valor INICIAL do navKey
   // é o certo aqui — untrack declara isso sem warning.

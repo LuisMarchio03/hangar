@@ -899,8 +899,7 @@
   // Com stream, só ele: depois de trocar de modo a lista ainda diz o modo antigo por um poll.
   const sessionHeadless = $derived(stateEvent ? stateEvent.headless === true
     : allSessions.find((s) => s.name === sessionName)?.headless === true);
-  // Codex oferece a ida ao terminal; a volta continua exclusiva do Claude.
-  const modoTrocavel = $derived(sessionProvider === 'claude' || (sessionProvider === 'codex' && sessionHeadless));
+  const modoTrocavel = $derived(sessionProvider === 'claude' || sessionProvider === 'codex');
   let trocandoModo = $state(false);
   // A troca reinicia o processo da sessão e muda onde ela vive; um clique no botão errado ("Abrir
   // no terminal" ao lado de Navegador/Rodar) fazia isso sem aviso. Confirma antes, dizendo o quê.

@@ -23,6 +23,10 @@ from app.adapters.codex.lancador import CLIENT_INFO
 class Ocupada(RuntimeError):
     """A sessão está num turno; a operação pedida derrubaria a conexão no meio dele."""
 
+
+class ShutdownPending(RuntimeError):
+    """O processo sinalizado ainda está vivo; não é seguro abrir outro escritor."""
+
 # Nomes iguais aos do picker `/permissions` da TUI, pra pílula do app ser a mesma nos dois modos.
 # `untrusted` deixou de existir (codex-cli 0.154: o app-server sai com "no longer supported"), então
 # o que separa os dois primeiros é só o sandbox — e sandbox não troca ao vivo por RPC

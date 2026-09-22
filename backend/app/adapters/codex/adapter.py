@@ -704,6 +704,8 @@ class CodexAdapter:
                 _log.info("codex: sessao %s sem controle vivo, mas o pane existe — nao recriado",
                           name)
                 return None
+            if self._falhas_subida.get(name, 0) >= self.TETO_SUBIDAS:
+                return None
             client = AppServerClient()
             home_kw = ({"codex_home": meta["codex_home"]}
                         if meta.get("codex_home") else {})
@@ -855,8 +857,19 @@ class CodexAdapter:
                 await client.close()
                 raise
         except Exception as exc:
+            from app.procinfo import _descendant_pids
+            from app.registry import _esperar_saida
             self._falhas_subida[name] = falhas + 1
-            await asyncio.to_thread(sem_terminal.matar, codex_sessions.load(name))
+            failed_meta = codex_sessions.load(name)
+            pid = ((failed_meta or {}).get("cano") or {}).get("pid")
+            pids = ([int(pid), *await asyncio.to_thread(_descendant_pids, int(pid))] if pid else [])
+            await asyncio.to_thread(sem_terminal.matar, failed_meta)
+            await asyncio.to_thread(_esperar_saida, pids)
+            if any(pid_vivo(pid) for pid in pids):
+                self._falhas_subida[name] = self.TETO_SUBIDAS
+                message = "O processo Codex ainda está encerrando; não abri outro processo."
+                self._problemas[name] = ("codex_headless_nao_subiu", message)
+                raise sem_terminal.ShutdownPending(message) from exc
             codex_sessions.update(name, cano=None)
             self._problemas[name] = ("codex_headless_nao_subiu", str(exc)[:300])
             if falhas + 1 >= self.TETO_SUBIDAS:
@@ -938,6 +951,7 @@ class CodexAdapter:
             await sess["client"].close()
             await asyncio.to_thread(_esperar_saida, pids)
             if any(pid_vivo(pid) for pid in pids):
+                self._falhas_subida[name] = self.TETO_SUBIDAS
                 raise RuntimeError("O processo antigo ainda está vivo; nenhum terminal foi aberto.")
             created = False
             launcher_pid = None
@@ -949,26 +963,7 @@ class CodexAdapter:
                 if not created:
                     raise RuntimeError("Não foi possível criar o terminal.")
                 launcher_pid = await asyncio.to_thread(tmux.pane_pid, name)
-                # Pane criado não prova que o lançador conseguiu abrir a TUI e retomar a thread.
-                deadline = time.monotonic() + 45
-                probe = AppServerClient()
-                try:
-                    while time.monotonic() < deadline:
-                        launched = codex_sessions.load(name) or {}
-                        if launched.get("tui_pid") and pid_vivo(launched["tui_pid"]):
-                            if not probe.endpoint:
-                                await probe.connect(launched["endpoint"])
-                                await probe.request("initialize", {"clientInfo": CLIENT_INFO})
-                            loaded = await probe.request("thread/loaded/list", {})
-                            if meta["thread_id"] in loaded.get("data", []):
-                                break
-                        if not await asyncio.to_thread(tmux.has_session, name):
-                            raise RuntimeError("O terminal encerrou antes de retomar a conversa.")
-                        await asyncio.sleep(0.2)
-                    else:
-                        raise RuntimeError("O terminal não retomou a conversa em 45 segundos.")
-                finally:
-                    await probe.close()
+                launched = await self._wait_terminal(name, meta["thread_id"])
                 if await self._conectar(name, launched) is None:
                     raise RuntimeError("O app-server do terminal não respondeu.")
                 if current.get("mode") in {"plan", "default"}:
@@ -1002,6 +997,137 @@ class CodexAdapter:
                 except Exception as restore_error:
                     raise RuntimeError(f"A troca falhou ({exc}) e a sessão não reiniciou: {restore_error}") from restore_error
                 raise RuntimeError(f"A troca falhou; a conversa continua sem terminal: {exc}") from exc
+
+    async def _wait_terminal(self, name: str, thread_id: str) -> dict:
+        # Pane criado não prova que a TUI carregou a conversa.
+        deadline = time.monotonic() + 45
+        probe = AppServerClient()
+        try:
+            while time.monotonic() < deadline:
+                launched = codex_sessions.load(name) or {}
+                if launched.get("tui_pid") and pid_vivo(launched["tui_pid"]):
+                    if not probe.endpoint:
+                        await probe.connect(launched["endpoint"])
+                        await probe.request("initialize", {"clientInfo": CLIENT_INFO})
+                    loaded = await probe.request("thread/loaded/list", {})
+                    if thread_id in loaded.get("data", []):
+                        return launched
+                if not await asyncio.to_thread(tmux.has_session, name):
+                    raise RuntimeError("O terminal encerrou antes de retomar a conversa.")
+                await asyncio.sleep(0.2)
+            raise RuntimeError("O terminal não retomou a conversa em 45 segundos.")
+        finally:
+            await probe.close()
+
+    async def open_headless(self, name: str) -> None:
+        """Continua a thread do terminal no cano; o chamador segura a trava de entrega."""
+        from app.registry import _env_sessao, _exigir_lancador_codex, _esperar_saida, _jev_do_processo
+        from app.procinfo import _descendant_pids
+
+        current = await self.read_settings(name)
+        async with self._locks.setdefault(name, asyncio.Lock()):
+            meta = codex_sessions.load(name)
+            if not meta or meta.get("headless"):
+                raise ValueError("A sessão Codex não está no terminal.")
+            sess = self._sessions.get(name)
+            if not sess or not sess.get("turn_state_known") or sess.get("in_progress"):
+                raise ValueError("Espere a sessão ficar ociosa antes de continuar sem terminal.")
+            if sess["client"].server_requests or sess["async_questions"].pending():
+                raise ValueError("Responda às perguntas e permissões antes de trocar de modo.")
+            if any(e.get("delivered") is False for e in await send_thread(PromptQueue(name).load)):
+                raise ValueError("Há mensagens na fila esperando entrega.")
+            if not meta.get("rollout_path") or not Path(meta["rollout_path"]).is_file():
+                raise ValueError("Envie a primeira mensagem antes de continuar sem terminal.")
+            account = codex_contas.resolve_account(meta.get("codex_account") or "default")
+            if str(account.home.expanduser().absolute()) != meta.get("codex_home"):
+                raise ValueError("A conta Codex mudou; a conversa não foi transferida.")
+            # O sidecar guarda a abertura, não uma mudança posterior pelo /permissions da TUI.
+            snapshot = await sess["client"].request("thread/resume", {"threadId": meta["thread_id"]})
+            sandbox = {"readOnly": "read-only", "workspaceWrite": "workspace-write",
+                       "dangerFullAccess": "danger-full-access"}.get((snapshot.get("sandbox") or {}).get("type"))
+            approval = snapshot.get("approvalPolicy")
+            permission = next((mode for mode, policy, boundary, _ in sem_terminal.MODOS
+                               if (policy, boundary) == (approval, sandbox)), None)
+            if permission is None:
+                raise ValueError("Esta política de permissões não é suportada sem terminal; a sessão foi mantida.")
+            self._restore_turn(sess, snapshot.get("thread") or {}, include_turns=False)
+            if not sess.get("turn_state_known") or sess.get("in_progress"):
+                raise ValueError("A sessão iniciou um turno; espere terminar antes de trocar de modo.")
+            await asyncio.to_thread(_exigir_lancador_codex)
+            pane_pid = await asyncio.to_thread(tmux.pane_pid, name)
+            meta = {**meta, "model": snapshot.get("model") or current["model"],
+                    "effort": _effort_da_thread(snapshot) or current["effort"],
+                    "permission_mode": permission, "key": meta.get("key") or sem_terminal.nova_chave(),
+                    "jev": await asyncio.to_thread(_jev_do_processo, meta.get("app_pid") or pane_pid)
+                           if meta.get("app_pid") or pane_pid else bool(meta.get("jev"))}
+            command = tmux.join_cmd(comando_do_lancador(
+                meta["cwd"], thread_id=meta["thread_id"], model=meta["model"], effort=meta["effort"],
+                codex_home=meta["codex_home"], codex_account=account.id, approval=approval, sandbox=sandbox))
+            env = _env_sessao(None, bool(meta.get("jev")), provider="codex")["env"]
+            env["CP_SESSION_KEY"] = meta["key"]
+            pids = [meta[k] for k in ("app_pid", "tui_pid", "launcher_pid") if meta.get(k)]
+            if pane_pid:
+                pids += [pane_pid, *await asyncio.to_thread(_descendant_pids, pane_pid)]
+            watcher = self._tmux_watchers.pop(name, None)
+            if watcher is not None:
+                watcher.cancel()
+                await asyncio.gather(watcher, return_exceptions=True)
+            # O lançador não deve apagar o sidecar enquanto trocamos de transporte.
+            codex_sessions.update(name, app_pid=None)
+            if not await asyncio.to_thread(tmux.kill_session, name):
+                codex_sessions.update(name, app_pid=meta.get("app_pid"))
+                self._start_tmux_watcher(name)
+                raise RuntimeError("Não foi possível fechar o terminal; o modo foi mantido.")
+            self.close_sync(name, preserve_preview=True)
+            await sess["client"].close()
+            await asyncio.to_thread(_esperar_saida, pids)
+            if any(pid_vivo(pid) for pid in pids):
+                # Sem o dono, ensure_running cairia no caminho legado e abriria outro servidor.
+                codex_sessions.update(name, app_pid=meta.get("app_pid"))
+                self._falhas_subida[name] = self.TETO_SUBIDAS
+                raise RuntimeError("O terminal ainda está encerrando; não abri outro processo.")
+            headless = {**meta, "headless": True, "cano": None, "endpoint": None,
+                        "app_pid": None, "tui_pid": None, "launcher_pid": None}
+            try:
+                with codex_sessions._locked(name):
+                    codex_sessions._write(name, headless)
+                if await self._subir_sem_terminal(name, headless) is None:
+                    raise RuntimeError("O Codex não respondeu.")
+                if (self._sessions.get(name) or {}).get("thread_id") != meta["thread_id"]:
+                    raise RuntimeError("O Codex não retomou a conversa original.")
+                if current.get("mode") in {"plan", "default"}:
+                    await self.set_mode(name, current["mode"])
+            except sem_terminal.ShutdownPending:
+                raise
+            except Exception as exc:
+                _log.warning("codex: troca para sem terminal falhou name=%s: %s", name, exc)
+                failed = self._sessions.get(name)
+                cano_pid = ((codex_sessions.load(name) or {}).get("cano") or {}).get("pid")
+                new_pids = ([int(cano_pid), *await asyncio.to_thread(_descendant_pids, int(cano_pid))]
+                            if cano_pid else [])
+                self.close_sync(name, preserve_preview=True)
+                if failed:
+                    await failed["client"].close()
+                await asyncio.to_thread(_esperar_saida, new_pids)
+                if any(pid_vivo(pid) for pid in new_pids):
+                    self._falhas_subida[name] = self.TETO_SUBIDAS
+                    raise RuntimeError("O Codex sem terminal ainda está encerrando; não abri outro processo.") from exc
+                restored = {**meta, "headless": False, "cano": None, "endpoint": None,
+                            "app_pid": None, "tui_pid": None, "launcher_pid": None}
+                try:
+                    with codex_sessions._locked(name):
+                        codex_sessions._write(name, restored)
+                    if not await asyncio.to_thread(tmux.new_session, name, meta["cwd"], command,
+                                                   provider="codex", env=env):
+                        raise RuntimeError("Não foi possível reabrir o terminal.")
+                    launched = await self._wait_terminal(name, meta["thread_id"])
+                    if await self._conectar(name, launched) is None:
+                        raise RuntimeError("O terminal não respondeu.")
+                    if current.get("mode") in {"plan", "default"}:
+                        await self.set_mode(name, current["mode"])
+                except Exception as restore_error:
+                    raise RuntimeError(f"A troca falhou ({exc}) e o terminal não voltou: {restore_error}") from restore_error
+                raise RuntimeError(f"A troca falhou; a conversa continua no terminal: {exc}") from exc
 
     async def warm_sessions(self) -> None:
         """Reconecta sidecars Codex em série, sem atrasar a subida do backend."""
