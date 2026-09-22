@@ -45,6 +45,9 @@
   let scanning = $state(false);
   let enderecoEl = $state<HTMLInputElement | null>(null);
   let falar = $state(false);   // é uma pergunta: quem quer, marca
+  // Ligado por padrão: é o que "adicionar servidor" sempre fez. Só é escolha quando há o outro
+  // lado (recado) pra ficar no lugar — máquina só pra recado, sem as sessões dela na lista.
+  let acompanhar = $state(true);
 
   // Link de pareamento colado inteiro: o token vai para o campo dele e o endereço fica só a origem.
   // Roda no blur, não no input — normalizar a cada tecla reescreveria o que a pessoa está digitando.
@@ -66,6 +69,8 @@
     }
     const tok = (n.token ?? token).trim();
     if (!tok || /\s/.test(tok)) { erro = m.maquinas_add_erro_token(); return; }
+    const soRecado = podeFalar && falar && !acompanhar;
+    if (podeFalar && !falar && !acompanhar) { erro = m.maquinas_add_erro_nenhum(); return; }
     ocupado = true;
     erro = '';
     let base = n.base;
@@ -96,12 +101,15 @@
     if (podeFalar && falar) {
       try {
         const { identificador } = await getIdentificador({ id: 'candidato', label: base, baseUrl: base, token: tok });
-        if (identificador) await registrarPeerDoisLados(apiTarget, { id: identificador, base_url: base, token: tok });
-      } catch {
-        // a lista dirá "só uma das pontas responde"; o que a pessoa pediu — acompanhar — segue.
+        if (!identificador) throw new Error(m.maquinas_add_erro_sem_identificador());
+        await registrarPeerDoisLados(apiTarget, { id: identificador, base_url: base, token: tok });
+      } catch (e) {
+        // Só recado: o registro ERA o pedido, e falha nele é o resultado — fica à vista.
+        // Com acompanhar, a lista dirá "só uma das pontas responde" e o que a pessoa pediu segue.
+        if (soRecado) { erro = e instanceof Error ? e.message : m.erro_desconhecido(); ocupado = false; return; }
       }
     }
-    addServer(base, tok);
+    if (!soRecado) addServer(base, tok);
     window.location.reload();
     ocupado = false;
   }
@@ -184,7 +192,14 @@
     </label>
     {#if podeFalar}
       <label class="am-falar-linha">
-        <input class="switch am-falar" type="checkbox" bind:checked={falar} disabled={ocupado} />
+        <input class="switch am-falar" type="checkbox" bind:checked={acompanhar} disabled={ocupado} onchange={() => (erro = '')} />
+        <span class="am-falar-txt">
+          <span>{m.maquinas_add_acompanhar()}</span>
+          <span class="am-ajuda">{m.maquinas_add_acompanhar_ajuda()}</span>
+        </span>
+      </label>
+      <label class="am-falar-linha">
+        <input class="switch am-falar" type="checkbox" bind:checked={falar} disabled={ocupado} onchange={() => (erro = '')} />
         <span class="am-falar-txt">
           <span>{m.maquinas_add_falar()}</span>
           <span class="am-ajuda">{m.maquinas_add_falar_ajuda()}</span>

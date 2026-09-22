@@ -827,7 +827,9 @@
       { label: m.comum_cancelar(), onClick: () => (pendingRemoval = null) },
       { label: m.lista_remover(), kind: 'danger', onClick: confirmRemoval },
     ]}>
-    <p class="ss-dialog-copy">{m.config_servidores_token_removido()}</p>
+    <!-- Com peer na linha só o lado deste aparelho sai, e o texto tem de dizer que o recado (e o
+         token dele no servidor) fica — senão parece que apagou tudo, ou que não apagou nada. -->
+    <p class="ss-dialog-copy">{linhas.some((l) => l.navegador?.id === pendingRemoval.id && l.peer) ? m.config_servidores_token_removido_recado_fica() : m.config_servidores_token_removido()}</p>
     {#if servers.length === 1}<p class="ss-dialog-copy">{m.config_servidores_voltar()}</p>{/if}
   </ConfirmDialog>
 {/if}
