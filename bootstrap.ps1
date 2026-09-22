@@ -1,4 +1,4 @@
-﻿# hangar - clonar e instalar numa linha so, no Windows.
+# hangar - clonar e instalar numa linha so, no Windows.
 #
 #   irm https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.ps1 | iex
 #
@@ -13,6 +13,9 @@
 #
 # Escrito pra Windows PowerShell 5.1 (o que vem no Windows), igual ao install.ps1: nada de
 # operador ternario, `??` nem API de .NET Core.
+#
+# Este arquivo e ASCII puro e SEM BOM: o `irm` do 5.1 nao tira o BOM, e a primeira linha
+# viraria "\uFEFF# ..." - que o iex tenta executar como comando.
 #
 # Instale num disco LOCAL. Numa pasta compartilhada por rede (`\\servidor\...`) o `uv sync` e o
 # `npm ci` recriariam `backend\.venv` e `frontend\node_modules` por cima dos da maquina de
@@ -33,8 +36,14 @@ function Tem($cmd)  { return [bool](Get-Command $cmd -ErrorAction SilentlyContin
 function Atualiza-Path {
     # winget grava o PATH no registro, mas o PowerShell JA ABERTO segue com o antigo -> o git
     # recem-instalado "nao existe". Mesmo truque do install.ps1.
-    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+    # Expandir e ACRESCENTAR, nunca substituir: PATH gravado como REG_SZ volta com %SYSTEMROOT%
+    # cru, e um %VAR% literal dentro de $env:Path nao resolve nada - substituir o PATH por isso
+    # some com o proprio powershell.exe.
+    $registro = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
                 [Environment]::GetEnvironmentVariable('Path', 'User')
+    $tudo = ($env:Path + ';' + [Environment]::ExpandEnvironmentVariables($registro)) -split ';' |
+            Where-Object { $_ } | Select-Object -Unique
+    $env:Path = $tudo -join ';'
 }
 
 $destino = $env:CP_DESTINO
@@ -105,5 +114,6 @@ Set-Location $destino
 # Num processo proprio com -ExecutionPolicy Bypass: sob `irm | iex` a politica desta sessao
 # pode ser Restricted, e ai um script EM ARQUIVO nao roda. O console e o mesmo, entao os
 # Read-Host do install.ps1 continuam perguntando a voce normalmente.
-& powershell -NoProfile -ExecutionPolicy Bypass -File $instalador
+# Pelo $PSHOME, nao pelo PATH: e o proprio host que esta rodando este texto.
+& (Join-Path $PSHOME 'powershell.exe') -NoProfile -ExecutionPolicy Bypass -File $instalador
 exit $LASTEXITCODE

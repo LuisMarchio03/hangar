@@ -107,7 +107,7 @@ function Eleva-E-Roda($descricao, $comando) {
         Nota "vai pedir a senha de administrador (UAC) so pra: $descricao"
     }
     try {
-        $p = Start-Process powershell -Verb RunAs -Wait -PassThru `
+        $p = Start-Process $PowerShellExe -Verb RunAs -Wait -PassThru `
             -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', $comando
         return ($p.ExitCode -eq 0)
     } catch { return $false }   # UAC recusado ou fechado
@@ -301,8 +301,31 @@ function Atualiza-Path {
     # winget grava o PATH no registro, mas o PowerShell JA ABERTO segue com o antigo -> o
     # programa recem-instalado "nao existe". Reler os dois escopos evita mandar fechar o terminal
     # no meio da instalacao, que e onde roteiro de Windows costuma perder o usuario.
-    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+    # Expandir e ACRESCENTAR, nunca substituir: PATH gravado como REG_SZ volta com %SYSTEMROOT%
+    # cru, e um %VAR% literal dentro de $env:Path nao resolve nada - substituir o PATH por isso
+    # some com o proprio powershell.exe.
+    $registro = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
                 [Environment]::GetEnvironmentVariable('Path', 'User')
+    $tudo = ($env:Path + ';' + [Environment]::ExpandEnvironmentVariables($registro)) -split ';' |
+            Where-Object { $_ } | Select-Object -Unique
+    $env:Path = $tudo -join ';'
+}
+
+$PowerShellExe = Join-Path $PSHOME 'powershell.exe'   # o host que esta rodando, sem depender do PATH
+
+function Grava-PathUsuario($valor) {
+    # ExpandString mantem o tipo REG_EXPAND_SZ; [Environment]::SetEnvironmentVariable grava REG_SZ
+    # e todo %VAR% do PATH vira texto morto. Set-ItemProperty nao avisa o Explorer, por isso o
+    # WM_SETTINGCHANGE na mao - sem ele, terminal novo nasce com o PATH velho.
+    Set-ItemProperty -Path 'HKCU:\Environment' -Name Path -Value $valor -Type ExpandString
+    if (-not ('Hangar.Ambiente' -as [type])) {
+        Add-Type -Namespace Hangar -Name Ambiente -MemberDefinition @'
+[DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+'@
+    }
+    $r = [UIntPtr]::Zero
+    [Hangar.Ambiente]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$r) | Out-Null
 }
 
 function Nativo {
@@ -394,7 +417,7 @@ function Instale-ClaudeCode {
     # caminhos de erro dele (Windows 32 bits, download falho, checksum errado). Avaliado no mesmo
     # processo, esse `exit` mataria o install.ps1 inteiro no meio, sem explicacao pro usuario.
     # Com `Nativo` o exit code volta como numero e a decisao continua aqui.
-    $rc = Nativo powershell -NoProfile -ExecutionPolicy Bypass -Command `
+    $rc = Nativo $PowerShellExe -NoProfile -ExecutionPolicy Bypass -Command `
         "irm https://claude.ai/install.ps1 | iex"
     if ($rc -ne 0) {
         Erro "Claude Code nao instalou (exit $rc)"
@@ -406,7 +429,7 @@ function Instale-ClaudeCode {
     if (Test-Path (Join-Path $binClaude 'claude.exe')) {
         $pathUsuario = [Environment]::GetEnvironmentVariable('Path', 'User')
         if ($pathUsuario -notlike "*$binClaude*") {
-            [Environment]::SetEnvironmentVariable('Path', "$pathUsuario;$binClaude", 'User')
+            Grava-PathUsuario "$pathUsuario;$binClaude"
             Nota "$binClaude adicionado ao PATH do usuario (o instalador da Anthropic nao faz isso)"
         }
     }
@@ -2101,7 +2124,7 @@ if (-not $bash) {
     # (3) PATH do usuario, pra `hangar-send` funcionar de qualquer terminal (e pro bash achar o shim).
     $pathUsuario = [Environment]::GetEnvironmentVariable('Path', 'User')
     if ($pathUsuario -notlike "*$binUsuario*") {
-        [Environment]::SetEnvironmentVariable('Path', "$pathUsuario;$binUsuario", 'User')
+        Grava-PathUsuario "$pathUsuario;$binUsuario"
         Atualiza-Path
         Ok "$binUsuario adicionado ao PATH do usuario"
         Nota 'Vale nos terminais NOVOS.'

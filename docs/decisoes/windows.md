@@ -27,7 +27,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **`shutil.rmtree` em pasta onde o git escreveu precisa de `onexc`** que tira o somente-leitura:
   o git grava packs read-only e o Windows recusa o unlink (WinError 5); no POSIX passa.
 - **Encoding é por interpretador**: `.cmd` em OEM, `.vbs` em UTF-16LE com BOM, `.sh` em UTF-8 sem
-  BOM, `.env`/`settings.json` sem BOM, perfil do PowerShell com BOM.
+  BOM, `.env`/`settings.json` sem BOM, perfil do PowerShell com BOM. `bootstrap.ps1` é a exceção
+  entre os `.ps1`: ASCII puro e SEM BOM, porque roda por `irm | iex` e o `irm` do 5.1 não tira o BOM.
+- **PATH lido do registro se EXPANDE e se ACRESCENTA, nunca substitui `$env:Path`**; o PATH de
+  usuário se grava como `REG_EXPAND_SZ` (`Set-ItemProperty -Type ExpandString` + `WM_SETTINGCHANGE`),
+  nunca por `[Environment]::SetEnvironmentVariable`. O `powershell.exe` filho vem de `$PSHOME`, não
+  do PATH.
 - **Instalação Windows mantém o nível de permissão**: iniciada como admin, registra tarefas
   interativas elevadas e atalhos elevados do Electron; comum, usa UAC pontual. Atualização
   manual sem elevação não pode rebaixar uma instalação elevada.
@@ -41,6 +46,26 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Recado repetido no Windows não é o par insistindo** — é o oráculo de entrega: o argv entre
   Python e psmux come uma contrabarra quando o argumento vai entre aspas, a comparação falha e o
   reconcile redigita. Olhe `REQUEUE` no log antes de responder.
+
+## PATH da máquina com `%SYSTEMROOT%` cru: o `Atualiza-Path` apagava o próprio `powershell.exe`
+
+Em 22/09/2026, num Windows Server (conta Administrator) o `bootstrap.ps1` clonou e parou em
+`The term 'powershell' is not recognized`. `[Environment]::GetEnvironmentVariable('Path','Machine')`
+devolvia `%SYSTEMROOT%\System32\WindowsPowerShell\v1.0\` literal: o PATH da máquina estava gravado
+como `REG_SZ`, e o .NET só expande `%VAR%` quando o valor é `REG_EXPAND_SZ`. O `Atualiza-Path`
+(bootstrap e install) SUBSTITUÍA `$env:Path` por esse texto, e `%VAR%` literal dentro de
+`$env:Path` não resolve nada; toda entrada com variável sumia da sessão, inclusive a do PowerShell.
+O `install.ps1` fabricava o mesmo estado no PATH de usuário: `[Environment]::SetEnvironmentVariable`
+grava `REG_SZ`, então uma entrada `%USERPROFILE%\...` que já existisse ali virava texto morto na
+gravação seguinte. Quem lê o PATH do registro agora expande e acrescenta ao PATH vivo (dedup por
+`Select-Object -Unique`), quem grava usa `Set-ItemProperty -Type ExpandString` e avisa o Explorer
+por `WM_SETTINGCHANGE` (sem o aviso, terminal novo nasce com o PATH velho), e o filho `powershell`
+vem de `Join-Path $PSHOME 'powershell.exe'`. Numa máquina com PATH `REG_EXPAND_SZ` nada muda:
+expandir texto sem `%` devolve o mesmo texto, e `$PSHOME` é o binário que o PATH acharia.
+
+O primeiro erro vermelho da mesma tela (`The term '#' is not recognized`, linha 1) era o BOM do
+`bootstrap.ps1`: o `irm` do 5.1 entrega o U+FEFF junto, a primeira linha vira `﻿# ...` e o
+`iex` tenta executá-la. Inofensivo (o script segue), mas o arquivo é ASCII e o BOM saiu.
 
 ## Esc após teclas de controle no ConPTY
 
