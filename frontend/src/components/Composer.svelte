@@ -2792,6 +2792,10 @@ import { cachePrazo } from '../lib/cachePrazo';
     padding-left: var(--space-2);
     flex-shrink: 0;
   }
+  /* Na aba estreita, o nome do repo cede espaco antes de cortar o anel de contexto. */
+  .composer.compacto .status-tab .tab-left { min-width: 32px; flex-shrink: 4; }
+  .composer.compacto .status-tab .tab-right { min-width: 0; flex-shrink: 1; }
+  .composer.compacto .status-tab .tab-right .repo-chip { overflow: hidden; }
 
   /* Card unico que reune status, textarea e controles. */
   .composer-card {
