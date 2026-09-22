@@ -314,20 +314,20 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server): P
 // que pode pertencer a outra máquina.
 async function apiFetchForServer<T>(s: Server, path: string, init?: RequestInit, prazoMs = 8000): Promise<T> {
   let res: Response;
+  // Prazo por PADRAO. Esta funcao fala com OUTRO servidor, e servidor offline atras de VPN nao
+  // recusa a conexao — o socket fica pendurado e a promessa nunca resolve (o comentario do
+  // getSessions ja registrava isso pro poll). Sem prazo, abrir Configuracoes de um servidor
+  // desligado prendia a folha em "Carregando..." pra sempre, sem erro nenhum na tela.
+  // Antes do spread do `init`: quem precisar de outro prazo (ou de nenhum) passa o proprio sinal.
+  const teto = AbortSignal.timeout(prazoMs);
   try {
-    res = await apiFetchRes(path, {
-      // Prazo por PADRAO. Esta funcao fala com OUTRO servidor, e servidor offline atras de VPN nao
-      // recusa a conexao — o socket fica pendurado e a promessa nunca resolve (o comentario do
-      // getSessions ja registrava isso pro poll). Sem prazo, abrir Configuracoes de um servidor
-      // desligado prendia a folha em "Carregando..." pra sempre, sem erro nenhum na tela.
-      // Antes do spread do `init`: quem precisar de outro prazo (ou de nenhum) passa o proprio sinal.
-      signal: AbortSignal.timeout(prazoMs),
-      ...init,
-    }, s);
+    res = await apiFetchRes(path, { signal: teto, ...init }, s);
   } catch (e) {
     // "signal timed out" (o texto que o navegador poe no TimeoutError) nao diz nada pra quem le a
-    // tela. Abort pedido POR QUEM CHAMOU continua passando cru — quem cancela sabe que cancelou.
-    if (e instanceof DOMException && e.name === 'TimeoutError') {
+    // tela. O WebKit ainda entrega o estouro como AbortError "Fetch is aborted": e o NOSSO teto
+    // disparado que diz que foi tempo. Abort pedido POR QUEM CHAMOU continua passando cru — quem
+    // cancela sabe que cancelou.
+    if (e instanceof DOMException && (e.name === 'TimeoutError' || (e.name === 'AbortError' && teto.aborted))) {
       throw new Error(`${s.label} não respondeu em ${Math.round(prazoMs / 1000)}s — servidor fora do ar?`);
     }
     throw e;

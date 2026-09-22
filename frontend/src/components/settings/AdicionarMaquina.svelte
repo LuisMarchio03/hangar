@@ -76,15 +76,12 @@
     erro = '';
     let base = n.base;
     // 20 s, não os 8 s padrão: daqui o probe sai do CELULAR pra máquina, e pela Tailscale em relay
-    // a primeira conexão passa de 8 s — "Fetch is aborted" sem dizer que foi o tempo.
+    // a primeira conexão passa de 8 s.
     const PRAZO_MS = 20000;
-    const msgDe = (e: unknown) =>
-      e instanceof Error && e.name === 'TimeoutError' ? m.maquinas_add_erro_timeout({ segundos: PRAZO_MS / 1000 })
-      : e instanceof Error ? e.message : String(e);
     try {
       await getConfigForServer({ id: 'candidato', label: base, baseUrl: base, token: tok }, PRAZO_MS);
     } catch (e) {
-      const msg1 = msgDe(e);
+      const msg1 = e instanceof Error ? e.message : String(e);
       const respostaHttp = e instanceof Error && /^\d{3}:/.test(e.message);
       if (!n.alternativa || respostaHttp) {
         erro = e instanceof Error ? `${m.falha_conexao()}: ${msg1}` : m.erro_desconhecido();
@@ -95,7 +92,8 @@
       try {
         await getConfigForServer({ id: 'candidato', label: base, baseUrl: base, token: tok }, PRAZO_MS);
       } catch (e2) {
-        erro = `${m.falha_conexao()}: ${msg1} · ${msgDe(e2)}`;
+        const msg2 = e2 instanceof Error ? e2.message : String(e2);
+        erro = `${m.falha_conexao()}: ${msg1} · ${msg2}`;
         ocupado = false;
         return;
       }
