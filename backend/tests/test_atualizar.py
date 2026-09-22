@@ -942,7 +942,7 @@ def test_reinicio_que_falha_deixa_rastro_no_estado(repo, monkeypatch):
     monkeypatch.setattr(atualizar, "_atualizar_dist", lambda: None)
     monkeypatch.setattr(atualizar, "_topologia", lambda: "systemd")
     monkeypatch.setattr(atualizar, "_reiniciar",
-                        lambda topo: (_ for _ in ()).throw(RuntimeError("systemctl explodiu")))
+                        lambda topo, porta: (_ for _ in ()).throw(RuntimeError("systemctl explodiu")))
     atualizar.executar_reinicio()
     assert "systemctl explodiu" in atualizar.estado()["reinicio_erro"]
 
