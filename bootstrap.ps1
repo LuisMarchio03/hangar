@@ -114,6 +114,9 @@ Set-Location $destino
 # Num processo proprio com -ExecutionPolicy Bypass: sob `irm | iex` a politica desta sessao
 # pode ser Restricted, e ai um script EM ARQUIVO nao roda. O console e o mesmo, entao os
 # Read-Host do install.ps1 continuam perguntando a voce normalmente.
-# Pelo $PSHOME, nao pelo PATH: e o proprio host que esta rodando este texto.
-& (Join-Path $PSHOME 'powershell.exe') -NoProfile -ExecutionPolicy Bypass -File $instalador
+# Pelo $PSHOME, nao pelo PATH: e o proprio host que esta rodando este texto. Sob pwsh 7 o
+# $PSHOME nao tem powershell.exe, e ai vale o caminho fixo do 5.1, que todo Windows tem.
+$ps = Join-Path $PSHOME 'powershell.exe'
+if (-not (Test-Path $ps)) { $ps = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" }
+& $ps -NoProfile -ExecutionPolicy Bypass -File $instalador
 exit $LASTEXITCODE

@@ -311,7 +311,10 @@ function Atualiza-Path {
     $env:Path = $tudo -join ';'
 }
 
-$PowerShellExe = Join-Path $PSHOME 'powershell.exe'   # o host que esta rodando, sem depender do PATH
+# O host que esta rodando, sem depender do PATH. Sob pwsh 7 o $PSHOME e o do pwsh, sem
+# powershell.exe: cai no caminho fixo do 5.1, que todo Windows tem.
+$PowerShellExe = Join-Path $PSHOME 'powershell.exe'
+if (-not (Test-Path $PowerShellExe)) { $PowerShellExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" }
 
 function Grava-PathUsuario($valor) {
     # ExpandString mantem o tipo REG_EXPAND_SZ; [Environment]::SetEnvironmentVariable grava REG_SZ
