@@ -752,6 +752,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
        scroller, entao o nome da sessao e o botao Terminal subiam junto com as metricas. */
     display: flex;
     flex-direction: column;
+    container-type: inline-size;
     /* COLUNA do shell, não card por cima da conversa: o nó é reparentado pelo Chat pra `.ctx-slot`
        (DesktopShell), que é quem reserva a largura. `relative` fica pelos filhos absolutos daqui
        (o punho de arrastar, os pontinhos de aviso). Enquanto era `absolute`, trocar de lugar com
@@ -1082,6 +1083,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
   .agora-ctx { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
   .agora-num {
     display: inline;
+    flex-shrink: 0;
     color: var(--text-primary);
     font-size: 44px;
     font-weight: var(--fw-semibold);
@@ -1120,6 +1122,40 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
     font-size: var(--text-2xs);
   }
   .agora-linha span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  @container (max-width: 380px) {
+    .ctx-actions { flex-wrap: wrap; }
+    .ctx-actions > .ctx-action { flex: 1 1 calc(50% - 2px); }
+    .acao-divisor { display: none; }
+
+    .agora-topo {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: start;
+      column-gap: var(--space-2);
+      row-gap: 2px;
+    }
+    .agora-ctx { display: contents; }
+    .agora-num { grid-column: 1; grid-row: 1; overflow: visible; }
+    .agora-custo { grid-column: 2; grid-row: 1; }
+    .agora-cap {
+      grid-column: 1 / -1;
+      grid-row: 2;
+      overflow: visible;
+      white-space: normal;
+    }
+    .agora-linha { display: block; }
+    .agora-linha span {
+      display: block;
+      overflow: visible;
+      white-space: normal;
+    }
+    .agora-linha span + span { margin-top: 2px; }
+
+    .ctx-aviso { flex-wrap: wrap; }
+    .ctx-aviso-texto { flex-basis: 100%; }
+    .ctx-aviso-btn { margin-left: auto; }
+  }
 
   /* Limites dentro do topo vivo: respiro entre a barra de contexto e as de cota, sem régua
      (continuam sendo o mesmo assunto). */
