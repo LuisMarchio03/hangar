@@ -1463,6 +1463,7 @@
   "maquinas_add_acompanhar": "Mostrar as sessões dele",
   "maquinas_add_acompanhar_ajuda": "As sessões dele entram na lista deste aparelho. Desligado, a máquina fica só para recado.",
   "maquinas_add_erro_nenhum": "Marque pelo menos uma das duas: mostrar as sessões ou recados entre sessões.",
+  "maquinas_add_erro_timeout": "não respondeu em {segundos} s — a máquina está ligada e este aparelho a alcança (Tailscale/rede)?",
   "maquinas_add_erro_sem_identificador": "O servidor respondeu sem identificador — defina o dele (CP_SERVER_ID) e tente de novo.",
   "maquinas_add_erro_endereco": "Endereço inválido — use IP ou nome, com porta se precisar.",
   "maquinas_add_erro_token": "Informe o token do servidor.",

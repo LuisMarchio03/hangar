@@ -75,10 +75,16 @@
     ocupado = true;
     erro = '';
     let base = n.base;
+    // 20 s, não os 8 s padrão: daqui o probe sai do CELULAR pra máquina, e pela Tailscale em relay
+    // a primeira conexão passa de 8 s — "Fetch is aborted" sem dizer que foi o tempo.
+    const PRAZO_MS = 20000;
+    const msgDe = (e: unknown) =>
+      e instanceof Error && e.name === 'TimeoutError' ? m.maquinas_add_erro_timeout({ segundos: PRAZO_MS / 1000 })
+      : e instanceof Error ? e.message : String(e);
     try {
-      await getConfigForServer({ id: 'candidato', label: base, baseUrl: base, token: tok });
+      await getConfigForServer({ id: 'candidato', label: base, baseUrl: base, token: tok }, PRAZO_MS);
     } catch (e) {
-      const msg1 = e instanceof Error ? e.message : String(e);
+      const msg1 = msgDe(e);
       const respostaHttp = e instanceof Error && /^\d{3}:/.test(e.message);
       if (!n.alternativa || respostaHttp) {
         erro = e instanceof Error ? `${m.falha_conexao()}: ${msg1}` : m.erro_desconhecido();
@@ -87,10 +93,9 @@
       }
       base = n.alternativa;
       try {
-        await getConfigForServer({ id: 'candidato', label: base, baseUrl: base, token: tok });
+        await getConfigForServer({ id: 'candidato', label: base, baseUrl: base, token: tok }, PRAZO_MS);
       } catch (e2) {
-        const msg2 = e2 instanceof Error ? e2.message : String(e2);
-        erro = `${m.falha_conexao()}: ${msg1} · ${msg2}`;
+        erro = `${m.falha_conexao()}: ${msg1} · ${msgDe(e2)}`;
         ocupado = false;
         return;
       }
@@ -143,6 +148,8 @@
     {fallbackFocus} initialFocus={enderecoEl}
     onClose={fechar}
     actions={[
+      // Cancelar explícito: no celular o card cobre a tela quase inteira e não sobra fundo pra tocar.
+      { label: m.comum_cancelar(), disabled: ocupado, onClick: fechar },
       { label: m.sessao_escanear_qr(), disabled: ocupado, onClick: () => (scanning = true) },
       { label: m.maquinas_add_testar(), kind: 'primary', disabled: !podeTestar, onClick: testarEAdicionar },
     ]}>

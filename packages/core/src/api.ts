@@ -1398,8 +1398,8 @@ export function pensamentoEmPt(textos: string[]): Promise<{ textos: string[] }> 
   });
 }
 
-export function getConfigForServer(s: Server): Promise<ConfigServidor> {
-  return apiFetchForServer(s, '/api/config');
+export function getConfigForServer(s: Server, prazoMs = 8000): Promise<ConfigServidor> {
+  return apiFetchForServer(s, '/api/config', undefined, prazoMs);
 }
 
 // `somente_leitura` é opcional: backend mais antigo responde só com `campos`.

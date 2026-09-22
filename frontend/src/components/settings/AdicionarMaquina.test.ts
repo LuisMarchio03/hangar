@@ -53,7 +53,7 @@ describe('AdicionarMaquina', () => {
     await tick();
     t.botao(m.maquinas_add_testar()).click();
     await tick(); await tick();
-    expect(getConfigForServer).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://192.168.0.10:8765', token: 'abc' }));
+    expect(getConfigForServer).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://192.168.0.10:8765', token: 'abc' }), 20000);
     expect(addServer).toHaveBeenCalledWith('http://192.168.0.10:8765', 'abc', undefined, { ativar: false });
     expect(t.onFechar).toHaveBeenCalled();
     unmount(t.comp);
