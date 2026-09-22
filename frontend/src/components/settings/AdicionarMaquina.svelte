@@ -23,12 +23,13 @@
   interface Props {
     fallbackFocus?: HTMLElement | null;
     onFechar: () => void;
+    onAdicionada?: () => void;
     apiTarget?: Server | null;
     podeFalar?: boolean;
     enderecoInicial?: string;
     busca?: Busca;
   }
-  let { fallbackFocus = null, onFechar, apiTarget = null, podeFalar = false, enderecoInicial = '', busca }: Props = $props();
+  let { fallbackFocus = null, onFechar, onAdicionada, apiTarget = null, podeFalar = false, enderecoInicial = '', busca }: Props = $props();
   let tokenEl = $state<HTMLInputElement | null>(null);
 
   function usarAchado(d: MaquinaDescoberta) {
@@ -109,9 +110,14 @@
         if (soRecado) { erro = e instanceof Error ? e.message : m.erro_desconhecido(); ocupado = false; return; }
       }
     }
+    // Sem reload: `addServer` dispara o envio da lista pro hub de sincronização, e recarregar a
+    // página matava esse envio no meio — ao voltar, o hub (sem a máquina nova) mandava e ela
+    // sumia. Quem precisa reagir escuta `onServersChanged`; a tela de máquinas recarrega por
+    // `onAdicionada`.
     if (!soRecado) addServer(base, tok);
-    window.location.reload();
     ocupado = false;
+    onAdicionada?.();
+    onFechar();
   }
 
   function lerQr(texto: string) {
@@ -192,7 +198,7 @@
     </label>
     {#if podeFalar}
       <label class="am-falar-linha">
-        <input class="switch am-falar" type="checkbox" bind:checked={acompanhar} disabled={ocupado} onchange={() => (erro = '')} />
+        <input class="switch am-acompanhar" type="checkbox" bind:checked={acompanhar} disabled={ocupado} onchange={() => (erro = '')} />
         <span class="am-falar-txt">
           <span>{m.maquinas_add_acompanhar()}</span>
           <span class="am-ajuda">{m.maquinas_add_acompanhar_ajuda()}</span>

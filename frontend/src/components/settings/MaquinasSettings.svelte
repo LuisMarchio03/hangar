@@ -173,7 +173,11 @@
   // na tela e a remoção clicada nele sai para a máquina errada.
   let geracao = 0;
 
+  // Máquina adicionada sem reload: a carga abaixo roda de novo pra ela entrar com identificador,
+  // peer e medição, como se a tela tivesse acabado de abrir.
+  let recarga = $state(0);
   $effect(() => {
+    recarga;
     const meu = ++geracao;
     // Troca de alvo apaga o que era do anterior: erro, carregamento e diálogo aberto
     // pertencem à máquina que saiu da tela. idsNavegador NÃO zera — o cache é por máquina do
@@ -784,7 +788,7 @@
 
 <ServerEditSheet open={!!emEdicao} server={emEdicao} onClose={() => (emEdicao = null)} onRename={rename} onUpdateToken={updateToken} />
 {#if showAdd}
-  <AdicionarMaquina {fallbackFocus} onFechar={() => (showAdd = false)}
+  <AdicionarMaquina {fallbackFocus} onFechar={() => (showAdd = false)} onAdicionada={() => recarga++}
     {apiTarget} podeFalar={!!resolvedServer && !!identificador} enderecoInicial={addEndereco}
     busca={{ itens: descobertas === null ? null : novasDescobertas, buscando: descobrindo, erro: descobertasErro,
              podeBuscar: !!resolvedServer, onBuscar: buscarNoTailscale }} />
