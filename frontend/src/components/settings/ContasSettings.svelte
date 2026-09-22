@@ -51,6 +51,9 @@ import { apagarConta, sairConta, apagarProvedorKimi, deleteEngine, deleteEngineF
   const qContas = createQuery(() => credenciais(apiTarget), () => clienteQuery);
   const contas = $derived(qContas.data ?? []);
   const carregando = $derived(qContas.isPending);
+  // Conta-base do app ainda sem login: a folha de conta nova manda entrar nela em vez de criar pasta.
+  const baseDeslogada = $derived(contas.find((c) => c.tipo === 'claude' && c.ativa
+    && c.login?.estado === 'ok' && !c.login.loggedIn) ?? null);
   const erro = $derived(qContas.error ? ((qContas.error as Error).message || String(qContas.error)) : '');
 
   // O engines.json entra na mesma tela: é o que faz uma chave de API mostrar o modelo no card e
@@ -1295,6 +1298,8 @@ import { apagarConta, sairConta, apagarProvedorKimi, deleteEngine, deleteEngineF
 
   {#if novo}
     <NovaCredencialSheet {apiTarget} nomesExistentes={Object.keys(motoresMapa)}
+      baseDeslogada={baseDeslogada?.nome ?? null}
+      onEntrarBase={() => { const b = baseDeslogada; novo = null; if (b) void iniciarEntrar(b); }}
       onFechar={() => { novo = null; carregar(); }}
       onCriada={() => { void carregar(geracao); }} />
   {/if}

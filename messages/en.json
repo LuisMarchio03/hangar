@@ -2770,6 +2770,8 @@
   "novacred_custom_nome": "Custom provider",
   "novacred_custom_desc": "Any compatible provider, given its base URL and key.",
   "novacred_nome_conta": "Account name",
+  "novacred_base_deslogada": "The default account ({nome}) is not signed in yet. Sign in to it first; it is the one the terminal claude uses.",
+  "novacred_entrar_base": "Sign in to {nome}",
   "novacred_modelos": "Models",
   "novacred_buscar_modelos": "Fetch from URL",
   "novacred_modelos_dica": "Fill in the URL and key, then fetch — the list comes from the provider itself.",

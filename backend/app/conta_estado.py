@@ -215,8 +215,20 @@ def concluir_onboarding(dir_conta: str) -> None:
     por refresh token marca); sem a marca, a TUI abre tema + método de login com a conta já logada.
     Mesma regra da CLI: só escreve quando ainda não está `true`. Falha vai pro diário, sem derrubar
     o login, que já está válido.
+
+    Na conta padrão o `<dir>/.claude.json` não é o arquivo que a TUI lê: sem `CLAUDE_CONFIG_DIR`
+    ela lê o `~/.claude.json` da HOME (ver `tmux._config_dir_padrao`). Marca os dois leitores:
+    o do pane do app (`claude_json_de`) e o do `claude` digitado num terminal comum.
     """
-    destino = Path(dir_conta) / ".claude.json"
+    from app import tmux
+    destinos = {tmux.claude_json_de(dir_conta)}
+    if tmux._mesmo_dir(dir_conta, tmux._config_dir_padrao()):
+        destinos.add(Path.home() / ".claude.json")
+    for destino in destinos:
+        _marcar_onboarding(destino, dir_conta)
+
+
+def _marcar_onboarding(destino: Path, dir_conta: str) -> None:
     try:
         try:
             dados = json.loads(destino.read_text(encoding="utf-8"))

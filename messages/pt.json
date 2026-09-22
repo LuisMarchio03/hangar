@@ -2770,6 +2770,8 @@
   "novacred_custom_nome": "Provedor personalizado",
   "novacred_custom_desc": "Qualquer provedor compatível, informando a URL base e a chave.",
   "novacred_nome_conta": "Nome da conta",
+  "novacred_base_deslogada": "A conta padrão ({nome}) ainda não tem login. Entre nela primeiro; ela é a que o claude do terminal usa.",
+  "novacred_entrar_base": "Entrar em {nome}",
   "novacred_modelos": "Modelos",
   "novacred_buscar_modelos": "Buscar na URL",
   "novacred_modelos_dica": "Preencha a URL e a chave e busque — a lista vem do próprio provedor.",
