@@ -1856,7 +1856,7 @@
   "loop_estado_parado": "parado",
   "loop_estado_esgotou": "esgotou iterações",
   "loop_servidor_nao_respondeu": "servidor não respondeu",
-  "esfriamento_servidor_desligado": "{servidor} está marcado como desligado; abra a lista de offline para procurar de novo",
+  "esfriamento_servidor_desligado": "{servidor} está offline; nova tentativa automática em breve. Use Reconectar para tentar agora",
   "loop_objetivo": "Objetivo",
   "loop_tentar_de_novo": "tentar de novo",
   "loop_desfazer": "desfazer",

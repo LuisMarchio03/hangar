@@ -554,3 +554,15 @@ estava correta: abaixo de 820px o `DesktopShell` não montava, e o chat sozinho 
 da lista que entrega os pedidos `nav`. O `App` agora retém o `sessionsStore` enquanto a ponte nativa
 existe e o login/sync permite entrar. O contador existente compartilha a conexão com as telas.
 Conferido no mesmo app e largura: o pedido passou a criar o navegador de uma sessão fora da tela.
+
+## Pares entre servidores e nomes compridos na lista
+
+22/09/2026. `jefferson-2` no notebook e `setup-vm` no Delphi-02 apareciam em dois grupos de um
+membro: cada ponta tem seu próprio `pair_gid`, e a lista separava servidores antes de agrupar.
+Pares remotos recíprocos agora são reunidos antes da divisão por servidor/projeto. A identidade
+vem de `/api/peers/identificador`, consultado uma vez após um quadro válido com par remoto;
+nome ou rótulo do servidor não basta. Os IDs originais continuam nas ações e no arrasto.
+
+O grupo mostra a origem de cada sessão. Títulos compridos quebram linha dentro da largura da
+barra. Na prova real, o par apareceu uma vez com contador 2, sem exceder a largura do cabeçalho.
+Os servidores offline ficam em um resumo recolhido; expandi-lo não dispara consultas.

@@ -1,10 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   definirArmazem, definirProtegido, estaDesligado, esquecerServidor, registrarFalha, registrarSucesso, retentarAgora,
   _limparEsfriamentoParaTestes,
+  onServerRecovered, retryAfterMs,
 } from './esfriamento';
 
 beforeEach(() => { _limparEsfriamentoParaTestes(); definirProtegido(() => false); });
+afterEach(() => { vi.useRealTimers(); });
 
 describe('servidor desligado', () => {
   it('servidor protegido (o ativo) nunca é marcado, venha a falha de onde vier', () => {
@@ -21,7 +23,7 @@ describe('servidor desligado', () => {
     expect(estaDesligado('pc')).toBe(true);
   });
 
-  it('só volta por ação da pessoa, nunca por tempo', () => {
+  it('ação explícita permite tentar antes do prazo', () => {
     registrarFalha('pc');
     retentarAgora('pc');
     expect(estaDesligado('pc')).toBe(false);
@@ -32,10 +34,43 @@ describe('servidor desligado', () => {
     expect(estaDesligado('pc')).toBe(false);
   });
 
+  it('prazo cresce até trinta minutos, sem confundir prazo vencido com resposta', () => {
+    vi.useFakeTimers();
+    for (const delay of [30000, 60000, 120000, 240000, 300000, 600000, 1800000, 1800000]) {
+      registrarFalha('pc');
+      expect(retryAfterMs('pc')).toBe(delay);
+      vi.advanceTimersByTime(1000);
+      registrarFalha('pc');
+      expect(retryAfterMs('pc')).toBe(delay - 1000);
+      vi.advanceTimersByTime(delay - 1000);
+      expect(retryAfterMs('pc')).toBe(0);
+      expect(estaDesligado('pc')).toBe(true);
+    }
+    registrarSucesso('pc');
+    registrarFalha('pc');
+    expect(retryAfterMs('pc')).toBe(30000);
+  });
+
   it('respondeu: sai da lista', () => {
     registrarFalha('pc');
     registrarSucesso('pc');
     expect(estaDesligado('pc')).toBe(false);
+  });
+
+  it('avisa a recuperação uma vez, depois de limpar a marca, e permite cancelar a assinatura', () => {
+    const recovered = vi.fn((id: string) => expect(estaDesligado(id)).toBe(false));
+    const off = onServerRecovered(recovered);
+    try {
+      registrarFalha('pc');
+      registrarSucesso('pc');
+      registrarSucesso('pc');
+      expect(recovered).toHaveBeenCalledExactlyOnceWith('pc');
+    } finally {
+      off();
+    }
+    registrarFalha('pc');
+    registrarSucesso('pc');
+    expect(recovered).toHaveBeenCalledTimes(1);
   });
 
   it('cada servidor é independente e sair da lista apaga o estado', () => {
@@ -76,9 +111,14 @@ describe('servidor desligado', () => {
     try {
       registrarFalha('pc');
       expect(guardado.get('hangar_servidores_desligados')).toContain('pc');
+      const saved = guardado.get('hangar_servidores_desligados')!;
+      vi.useFakeTimers();
+      vi.advanceTimersByTime(20000);
       _limparEsfriamentoParaTestes();          // simula o app subindo de novo…
-      guardado.set('hangar_servidores_desligados', JSON.stringify(['pc']));
+      guardado.set('hangar_servidores_desligados', saved);
       expect(estaDesligado('pc')).toBe(true);  // …e a marca continua lá
+      expect(retryAfterMs('pc')).toBeGreaterThan(9000);
+      expect(retryAfterMs('pc')).toBeLessThanOrEqual(10000);
     } finally {
       definirArmazem(null);
     }

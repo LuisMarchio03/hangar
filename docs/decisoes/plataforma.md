@@ -403,12 +403,35 @@ espera de 1 min funcionando). A causa é o iOS, que descarrega e recarrega o PWA
 tempo todo: cada retomada zerava o contador em memória e o aparelho recomeçava as três tentativas
 por servidor.
 
-A regra que valeu é a do usuário: **uma falha de REDE já marca o servidor como desligado, e ele só
+A regra adotada naquele momento foi: **uma falha de REDE já marca o servidor como desligado, e ele só
 volta a ser procurado quando a pessoa mandar** — não há retomada por tempo. O estado vai para o
 `localStorage`, senão o recarregamento do app apaga o que já foi aprendido. Erro HTTP não conta: a
 máquina respondeu, e marcá-la esconderia o erro que precisa aparecer. Abrir a lista dos offline na
 barra lateral é o "buscar agora" e libera todos. `enabled: false` no `peers.json` continua
 existindo para a máquina que se quer fora de propósito.
+
+Uma resposta recebida em outra tela também comprova que a máquina voltou. Em 22/09/2026, o
+Delphi-02 respondia à tela Máquinas, mas sua lista continuava na última sessão conhecida: os
+clientes de peers/alcance não retiravam a marca de falha, e o stream encerrado não era reaberto.
+Essas respostas agora liberam e reconectam somente o servidor que respondeu. Falha de rede
+mantém a marca. Expandir o resumo dos offline não libera novas tentativas; Reconectar antecipa
+a tentativa por servidor ou para todos, conforme o botão usado. Marca sem lista carregada aparece no
+resumo offline, em vez de sumir.
+
+Ainda em 22/09/2026, o usuário substituiu o bloqueio permanente por recuperação automática.
+Agora cada falha agenda outra tentativa em 30 s, 1 min, 2 min, 4 min, 5 min, 10 min e,
+daí em diante, 30 min. Uma resposta limpa a contagem; a próxima queda recomeça em 30 s.
+Prazo absoluto e contagem ficam no armazenamento: recarregar não reinicia a espera nem libera
+consultas antecipadas. A marca antiga sem prazo migra uma vez para 30 s. Expirar só permite
+tentar; a marca offline sai quando há resposta. A regra também vale para o servidor ativo.
+Sessões de uma rota offline ficam fora da agregação visual, preservando o cache interno; assim
+uma rota indisponível não esconde uma cópia saudável da mesma sessão pela deduplicação.
+
+Na mesma data, o Ctrl+R reproduziu uma falsa queda: o `EventSource.onerror` gravou a marca 6 ms
+depois do `beforeunload`, antes do `pagehide`. A saída da página agora fecha os streams e cancela
+seus prazos, protegendo também os fetches cancelados pela navegação. Eventos de uma conexão
+substituída não alteram a atual. `pageshow` restaura os streams ao voltar pelo histórico, sem
+apagar marcas de falhas reais.
 
 **O custo real não era bateria, era a VPN do iPhone.** Com o cabo USB e o `idevicesyslog`, o log de
 dentro do aparelho mostrou a mesma varredura acontecendo na extensão de rede do Tailscale

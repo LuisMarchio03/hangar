@@ -8,14 +8,16 @@
 import * as m from '../paraglide/messages';
 import type { EventSourceLike } from '@hangar/core';
 import { openSessionsStream, registrarDiag, novoReqDiag } from '@hangar/core';
-import { getActiveId, listServers, onServersChanged, type Server } from './auth';
+import { listServers, onServersChanged, type Server } from './auth';
 import { navPelaLista } from './navPelaLista';
+import { getIdentificador } from './peers';
 import { ouvirFechamentoNav, podarNavMortos } from './navegadorPanel.svelte';
 import { aggregateSessions, epocasDeRecriacao, jsonlDaSessao, sweepHidden, type Slot, type Aggregate, type Epocas } from '@hangar/core';
-import { avisarSemArmazem, definirArmazem, definirProtegido, estaDesligado, esquecerServidor, registrarFalha, registrarSucesso, retentarAgora } from '@hangar/core';
+import { avisarSemArmazem, definirArmazem, definirProtegido, estaDesligado, esquecerServidor, onServerRecovered, registrarFalha, registrarSucesso, retentarAgora, retryAfterMs } from '@hangar/core';
 
 function createSessionsStore() {
   let servers = $state<Server[]>([]);
+  let identities = $state.raw<ReadonlyMap<string, string>>(new Map());
   // $state.raw: agg é SUBSTITUÍDO inteiro a cada recompute e nunca mutado — o proxy profundo do
   // $state só custava, e embrulhar as rows em proxy quebrava a identidade que o memo do
   // aggregateSessions preserva (rows de servidor que não emitiu = mesmo objeto -> keyed each das
@@ -23,6 +25,7 @@ function createSessionsStore() {
   let agg = $state.raw<Aggregate>({ rows: [], byServer: [], loading: false });
   const slots = new Map<string, Slot>();
   const streams = new Map<string, EventSourceLike>();
+  let leavingPage = false;
   // Watchdog por stream (mesmo padrão do Chat): o backend emite `ping` a cada ~10s no stream de
   // lista justamente pra isto — suspend/VPN flap deixa a conexão MEIO-ABERTA sem onerror e as 4
   // views congelavam em silêncio até um reconnect manual. Sem sinal por 25s -> fecha e reabre.
@@ -38,12 +41,6 @@ function createSessionsStore() {
   // `$state.raw` porque o Map é SUBSTITUÍDO inteiro a cada medição (mesma escolha do `agg` acima):
   // sem ser estado reativo, a reatribuição não chegaria em quem lê num `$derived`.
   let latencias = $state.raw(new Map<string, number>());
-  // Backoff por servidor OFFLINE: o auto-retry do EventSource martela a cada ~3s pra sempre —
-  // num tablet com 2+ servidores desligados isso é rádio/bateria à toa. Falhou -> fecha o stream
-  // e re-tenta com espera crescente (5s -> 60s); qualquer frame bom zera a espera.
-  const RETRY_MIN_MS = 5_000;
-  const RETRY_MAX_MS = 60_000;
-  const retryDelays = new Map<string, number>();
   const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const quedas = new Map<string, number>();
   const tentativas = new Map<string, number>();
@@ -51,26 +48,7 @@ function createSessionsStore() {
   // É o que distingue stream vivo de stream ZUMBI na volta do segundo plano.
   const ultimoSinal = new Map<string, number>();
   const SEM_SINAL_MS = 20_000;
-  // Agenda a re-tentativa de UM servidor com backoff. Usado pelo onerror E pelo watchdog — o
-  // watchdog reconectando na hora deixava servidor PENDURADO (tailscale pra nó morto não recusa,
-  // trava o socket) ciclando 25s/25s pra sempre e afogando os sockets do servidor bom no iOS.
-  /** Servidor que NÃO pode ser marcado como desligado: o ativo e o dono da URL que serve esta
-   *  página. Parar de procurá-los deixa o app carregando para sempre — e sem lista não há de onde
-   *  clicar em "buscar agora". */
-  function intocavel(s: Server): boolean {
-    if (s.id === getActiveId()) return true;
-    try {
-      return !!s.baseUrl && new URL(s.baseUrl).origin === globalThis.location?.origin;
-    } catch {
-      return false;
-    }
-  }
-  // A regra vale pra TODO `registrarFalha`, inclusive o do apiFetch (criar sessão, trocar conta):
-  // só aqui não bastava — o servidor ativo podia ser marcado por outro caminho.
-  definirProtegido((id) => {
-    const s = servers.find((x) => x.id === id);
-    return s ? intocavel(s) : id === getActiveId();
-  });
+  definirProtegido(() => leavingPage);
   // O core não toca DOM: o `localStorage` (que faz a marca sobreviver ao recarregamento do PWA)
   // entra por aqui. Indisponível (modo privado), fica só em memória — o core avisa no diário.
   try {
@@ -81,23 +59,20 @@ function createSessionsStore() {
   }
 
   function scheduleRetry(id: string) {
-    // Marcado como desligado: não reagenda nada. O retry daqui tinha teto de 60s, e pra máquina
-    // que está fora há um dia isso é uma tentativa por minuto, para sempre — no iPhone, dentro da
-    // extensão de rede do Tailscale, é isso que empurra a memória até o teto e derruba a VPN.
-    if (estaDesligado(id)) return;
-    const delay = retryDelays.get(id) ?? RETRY_MIN_MS;
+    if (leavingPage || refs === 0) return;
+    const delay = Math.max(1000, retryAfterMs(id));
     const servidor = servers.find((s) => s.id === id);
     if (servidor) registrarDiag({ evento: 'lista.retentativa', tela: 'lista',
       espera_ms: delay, tentativa: tentativas.get(id) ?? 1 }, servidor.baseUrl);
-    retryDelays.set(id, Math.min(delay * 2, RETRY_MAX_MS));
     clearTimeout(retryTimers.get(id));
     retryTimers.set(id, setTimeout(() => {
       retryTimers.delete(id);
-      if (refs > 0 && servers.some((x) => x.id === id)) connect(servers);
+      if (refs > 0 && servers.some((x) => x.id === id)) connect(servers, id);
     }, delay));
   }
   let refs = 0;
   let offChanged: (() => void) | null = null;
+  let offRecovered: (() => void) | null = null;
   let offNavFechado: (() => void) | null = null;
   // Exclusão otimista: chaves `serverId::name` escondidas da lista enquanto o delete está em voo.
   // A faxina roda a cada recompute — quando o SSE confirma o sumiço, a marca sai sozinha.
@@ -120,26 +95,37 @@ function createSessionsStore() {
   }
 
   // Reconcilia streams com a lista: fecha o que sumiu, abre o que entrou, mantém o resto.
-  function connect(list: Server[]) {
+  function connect(list: Server[], onlyId?: string) {
+    if (leavingPage || refs === 0) return;
+    for (const id of identities.keys()) {
+      if (!list.some(s => s.id === id)) { const next = new Map(identities); next.delete(id); identities = next; }
+    }
     for (const [id, es] of streams) {
       if (!list.some((s) => s.id === id)) {
         es.close(); streams.delete(id); slots.delete(id); ultimoSinal.delete(id);
         clearTimeout(watchdogs.get(id)); watchdogs.delete(id);
         clearTimeout(primeiros.get(id)); primeiros.delete(id);
-        clearTimeout(retryTimers.get(id)); retryTimers.delete(id); retryDelays.delete(id);
+        clearTimeout(retryTimers.get(id)); retryTimers.delete(id);
         quedas.delete(id); tentativas.delete(id); esquecerServidor(id);
         if (latencias.has(id)) { latencias = new Map(latencias); latencias.delete(id); }
       }
     }
     for (const s of list) {
+      if (onlyId !== undefined && s.id !== onlyId) continue;
       if (streams.has(s.id)) continue;
-      // Desligado: nem abre. Sem isto a regra só valia pros fetches, e o stream continuava
-      // martelando a mesma máquina morta. O ATIVO nunca entra nisso: é o servidor que a pessoa
-      // está usando, e pará-lo deixa o app carregando para sempre — sem lista, não há de onde
-      // clicar em "buscar agora".
-      if (estaDesligado(s.id) && !intocavel(s)) continue;
+      if (retryAfterMs(s.id) > 0) {
+        slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
+        scheduleRetry(s.id);
+        continue;
+      }
+      clearTimeout(retryTimers.get(s.id)); retryTimers.delete(s.id);
+      if (estaDesligado(s.id)) slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
       const req = novoReqDiag();
       const es = openSessionsStream(s, req);
+      streams.set(s.id, es);
+      const isCurrent = () => !leavingPage && refs > 0 && streams.get(s.id) === es;
+      let identityRequested = false;
+      if (identities.has(s.id)) { const next = new Map(identities); next.delete(s.id); identities = next; }
       const tentativa = (tentativas.get(s.id) ?? 0) + 1;
       tentativas.set(s.id, tentativa);
       registrarDiag({ evento: 'lista.abrir', tela: 'lista', req, tentativa }, s.baseUrl);
@@ -151,14 +137,14 @@ function createSessionsStore() {
         if (!quedas.has(s.id)) quedas.set(s.id, Date.now());
         registrarDiag({ evento: 'lista.falhou', nivel: 'aviso', tela: 'lista', req,
           codigo, tentativa, espera_ms }, s.baseUrl);
-        // O ativo não é marcado: ele tem que continuar sendo tentado (é a máquina que a pessoa
-        // abriu), e quem cuida de não martelar ali é o backoff de 5→60s logo abaixo.
-        if (!jaContou && !intocavel(s)) { jaContou = true; registrarFalha(s.id); }
+        if (!jaContou) { jaContou = true; registrarFalha(s.id); }
       };
       const arm = () => {
+        if (!isCurrent()) return;
         ultimoSinal.set(s.id, Date.now());
         clearTimeout(watchdogs.get(s.id));
         watchdogs.set(s.id, setTimeout(() => {
+          if (!isCurrent()) return;
           falhou('silencio', WATCHDOG_MS);
           // es.close() num stream já fechado é noop; connect() reabre só este servidor (os outros
           // seguem em streams). O arm() do stream novo substitui este timer no mesmo id.
@@ -177,8 +163,7 @@ function createSessionsStore() {
       // até lá o servidor tem `error` nulo e passa por vivo em quem filtra offline — com o watchdog
       // de 25s isso era meio minuto oferecendo máquina desligada na folha de "Nova sessão". O
       // stream da lista manda `sessions` na conexão (medido em 5ms daqui), então silêncio longo
-      // aqui é máquina fora do ar, não lentidão. Só MARCA: não fecha o stream nem mexe no retry,
-      // pra um servidor lento que responda depois voltar sozinho no próximo evento.
+      // aqui encerra a tentativa e agenda outra conforme o prazo persistido.
       // Sem guarda de "o slot já existe": `reconnect()` (botão Atualizar) e `onVisibleKick` (celular
       // acordando) reabrem o stream MANTENDO o slot antigo, e ali a guarda fazia o prazo virar
       // no-op — o celular acordando é justamente quando isto precisa valer. O timer chegar a
@@ -186,6 +171,7 @@ function createSessionsStore() {
       // (mesmo tratamento do watchdog): "offline com dado velho" é diferente de "nunca respondeu",
       // e o banner de erro depende dessa distinção.
       const tPrimeiro = setTimeout(() => {
+        if (!isCurrent()) return;
         falhou('primeiro_quadro_timeout', PRIMEIRO_QUADRO_MS);
         if (primeiros.get(s.id) === tPrimeiro) primeiros.delete(s.id);
         slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
@@ -197,6 +183,7 @@ function createSessionsStore() {
           es.close();
           streams.delete(s.id);
           clearTimeout(watchdogs.get(s.id)); watchdogs.delete(s.id);
+          scheduleRetry(s.id);
         }
       }, PRIMEIRO_QUADRO_MS);
       primeiros.set(s.id, tPrimeiro);
@@ -220,6 +207,7 @@ function createSessionsStore() {
         if (primeiros.get(s.id) === tPrimeiro) primeiros.delete(s.id);
       };
       const chegou = () => {
+        if (!isCurrent()) return;
         if (!medido) {
           medido = true;
           // Map NOVO, não `.set` no mesmo: quem lê isto num `$derived` acompanha a REFERÊNCIA —
@@ -233,15 +221,32 @@ function createSessionsStore() {
       // O ping é prova de vida (cancela o prazo), mas NÃO mede: ele só sai de 8 em 8 segundos, e
       // com o refresher do backend frio ele é o PRIMEIRO evento a chegar — a "latência da rota"
       // viraria ~8000ms de espera do servidor. Quem mede é o quadro de dados.
-      es.addEventListener('ping', cancelarPrazo);
-      es.addEventListener('sessions', chegou);
-      es.addEventListener('ping', arm);
-      es.addEventListener('sessions', (e) => {
+      es.addEventListener('ping', () => {
+        if (!isCurrent()) return;
+        cancelarPrazo();
+        registrarSucesso(s.id);
         arm();
-        retryDelays.delete(s.id);   // sinal de vida: proximo erro recomeca do backoff minimo
+      });
+      es.addEventListener('sessions', (e) => {
+        if (!isCurrent()) return;
+        chegou();
+        arm();
         registrarSucesso(s.id);     // e o esfriamento sai de cena inteiro
         try {
-          slots.set(s.id, { sessions: JSON.parse(e.data), error: null });
+          const sessions = JSON.parse(e.data);
+          if (!Array.isArray(sessions)) throw new Error('sessions frame must be an array');
+          slots.set(s.id, { sessions, error: null });
+          if (!identityRequested && sessions.some((session: { pair_peers?: string[] }) =>
+            session.pair_peers?.some(peer => peer.includes('::')))) {
+            identityRequested = true;
+            void getIdentificador(s).then(({ identificador }) => {
+              if (!isCurrent() || !identificador) return;
+              identities = new Map(identities).set(s.id, identificador);
+            }).catch((error: unknown) => {
+              registrarDiag({ evento: 'lista.identificador_falhou', nivel: 'aviso',
+                codigo: error instanceof Error ? error.name : 'erro' }, s.baseUrl);
+            });
+          }
           const caiuEm = quedas.get(s.id);
           if (primeiroValido || caiuEm !== undefined) {
             registrarDiag({ evento: caiuEm === undefined ? 'lista.conectou' : 'lista.voltou',
@@ -252,31 +257,37 @@ function createSessionsStore() {
             tentativas.delete(s.id);
           }
         } catch {
-          falhou('json_invalido');
+          registrarDiag({ evento: 'lista.falhou', nivel: 'aviso', tela: 'lista', req,
+            codigo: 'json_invalido', tentativa }, s.baseUrl);
           // Frame malformado: sem isto o throw sobe no dispatch do EventSource e o slot congela em
           // silêncio (onerror não dispara pra erro de parse). Mantém a última lista boa e avisa.
-          slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
+          slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: m.sessao_erro_servidor() });
         }
         recompute();
       });
       // O agente abriu o navegador embutido de uma sessão (possivelmente fora da tela) — ver
       // navPelaLista. Vai pelo stream da lista porque é o único que o desktop mantém sempre aberto.
       es.addEventListener('nav', (e) => {
+        if (!isCurrent()) return;
         arm();
         void navPelaLista(s, (e as MessageEvent).data);
       });
       // Refresher do backend falhou (achado do hunter): sem isto, lista vazia por erro interno era
       // indistinguível de zero sessões. Mantém a última lista boa; o erro aparece distinto de offline.
       es.addEventListener('list_error', () => {
+        if (!isCurrent()) return;
         // A máquina RESPONDEU (o SSE está aberto): não é falha de rede, então não esfria — marcar
         // desligado aqui confundia bug do refresher com máquina fora do ar.
         registrarDiag({ evento: 'lista.falhou', nivel: 'aviso', tela: 'lista', req,
           codigo: 'produtor_falhou', tentativa }, s.baseUrl);
+        registrarSucesso(s.id);
+        cancelarPrazo();
         arm();   // conexão está viva — só o produtor de dados falhou
         slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: m.sessao_erro_servidor() });
         recompute();
       });
       es.onerror = () => {
+        if (!isCurrent()) return;
         falhou(es.readyState === 2 ? 'stream_fechado' : 'stream_interrompido');
         slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
         recompute();
@@ -287,7 +298,6 @@ function createSessionsStore() {
         cancelarPrazo();   // o stream falhou; NÃO mede — falhar rápido não é ser rápido
         scheduleRetry(s.id);
       };
-      streams.set(s.id, es);
     }
     recompute();
   }
@@ -295,7 +305,7 @@ function createSessionsStore() {
   // Wake do aparelho (iOS congela timers em background): zera o backoff e reconecta os caidos NA
   // HORA — sem isto, o retry agendado pre-sleep deixava a lista "offline" por ate 60s com rede boa.
   function onVisibleKick() {
-    if (document.visibilityState !== 'visible' || refs === 0) return;
+    if (leavingPage || document.visibilityState !== 'visible' || refs === 0) return;
     // Stream ZUMBI: o iOS suspende o PWA, o socket morre sem `onerror` e o EventSource continua no
     // mapa — como o `connect` só abre quem NÃO tem stream, ninguém o reabria, e o watchdog que
     // pegaria isso não roda em segundo plano. O app ficava mudo com a rede perfeita até a pessoa
@@ -314,15 +324,42 @@ function createSessionsStore() {
     }
     for (const s of servers) if (!streams.has(s.id)) registrarDiag({
       evento: 'lista.reconectar', tela: 'lista', codigo: 'app_visivel' }, s.baseUrl);
-    retryDelays.clear();
     for (const t of retryTimers.values()) clearTimeout(t);
     retryTimers.clear();
     connect(servers);
   }
 
+  function disconnect() {
+    for (const timers of [watchdogs, primeiros, retryTimers]) {
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+    }
+    const previous = [...streams.values()];
+    streams.clear();
+    for (const es of previous) es.close();
+  }
+
+  function onPageExit() {
+    // O navegador dispara onerror ao recarregar, antes mesmo do pagehide.
+    leavingPage = true;
+    disconnect();
+  }
+
+  function onPageShow() {
+    leavingPage = false;
+    connect(servers);
+  }
+
   function start() {
+    leavingPage = false;
+    window.addEventListener('beforeunload', onPageExit);
+    window.addEventListener('pagehide', onPageExit);
+    window.addEventListener('pageshow', onPageShow);
     servers = listServers();
     offNavFechado = ouvirFechamentoNav();
+    offRecovered = onServerRecovered((id) => {
+      if (refs > 0 && servers.some((s) => s.id === id) && !streams.has(id)) connect(servers, id);
+    });
     connect(servers);
     offChanged = onServersChanged(() => { servers = listServers(); connect(servers); });
     document.addEventListener('visibilitychange', onVisibleKick);
@@ -330,22 +367,20 @@ function createSessionsStore() {
   function stop() {
     offChanged?.();
     offChanged = null;
+    offRecovered?.();
+    offRecovered = null;
     offNavFechado?.();
     offNavFechado = null;
     document.removeEventListener('visibilitychange', onVisibleKick);
-    // Timers primeiro: um watchdog disparando pós-stop reabriria streams com refs = 0.
-    for (const t of watchdogs.values()) clearTimeout(t);
-    watchdogs.clear();
-    for (const t of primeiros.values()) clearTimeout(t);
-    primeiros.clear();
+    window.removeEventListener('beforeunload', onPageExit);
+    window.removeEventListener('pagehide', onPageExit);
+    window.removeEventListener('pageshow', onPageShow);
+    disconnect();
     // A poda por servidor removido mora no laço do `connect()`, que compara com `streams` — e aqui
     // `streams` já foi esvaziado. Sem zerar, um servidor apagado enquanto ninguém segurava o store
     // voltaria exibindo a latência de outra época, que ninguém mais vai corrigir.
     latencias = new Map();
-    for (const t of retryTimers.values()) clearTimeout(t);
-    retryTimers.clear(); retryDelays.clear();
-    for (const es of streams.values()) es.close();
-    streams.clear();
+    identities = new Map();
     slots.clear();
     quedas.clear(); tentativas.clear();
     // Parar não é sumiço: sem isto, o próximo retain() (o próprio DesktopShell, ao remontar)
@@ -366,17 +401,20 @@ function createSessionsStore() {
     epoca(serverId: string, name: string): number { return epochs.get(`${serverId}::${name}`) ?? 0; },
     get loading() { return agg.loading; },
     get servers() { return servers; },
+    get identities() { return identities; },
     retain() { if (++refs === 1) start(); },
     // Guarda contra consumidor futuro desbalanceado: um release a mais deixaria refs negativo e o
     // singleton nunca mais reconectaria (nenhum retain voltaria a bater 1). Piso em 0.
     release() { if (refs > 0 && --refs === 0) stop(); },
-    /** "Buscar agora": quem abriu a lista dos offline quer ver aqueles servidores JÁ. Libera a
-     *  espera de todos e reconecta o que estiver fora. */
-    buscarAgora() {
-      retentarAgora();
+    /** Tentativa explicitamente pedida pela pessoa, nunca ao expandir o resumo dos offline. */
+    buscarAgora(id?: string) {
+      retentarAgora(id);
       if (refs === 0) return;
-      for (const [id, t] of retryTimers) { clearTimeout(t); retryTimers.delete(id); }
-      connect(servers);
+      for (const [key, timer] of retryTimers) {
+        if (id !== undefined && key !== id) continue;
+        clearTimeout(timer); retryTimers.delete(key);
+      }
+      connect(servers, id);
     },
     reconnect() {
       // Resgata streams meio-abertos sem recarregar a página (o "Atualizar" dos menus).
@@ -385,8 +423,8 @@ function createSessionsStore() {
       if (refs === 0) return;
       for (const s of servers) registrarDiag({ evento: 'lista.reconectar',
         tela: 'lista', codigo: 'manual' }, s.baseUrl);
-      for (const es of streams.values()) es.close();
-      streams.clear();
+      disconnect();
+      retentarAgora();
       connect(servers);
     },
     refreshServers() {

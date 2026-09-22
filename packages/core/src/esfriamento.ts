@@ -1,34 +1,24 @@
-// Servidor que não responde é marcado como DESLIGADO e para de ser procurado. Volta a ser tentado
-// quando a pessoa mandar — não sozinho, por relógio.
-//
-// A primeira versão disto tinha escala de espera (3 falhas, 1/2/5/15 min, retomada automática).
-// Medido no iPhone em 16/09/2026: não bastou. No iOS o sistema descarrega e recarrega o PWA em
-// segundo plano o tempo todo, e cada retomada zerava o contador em memória — o aparelho voltava a
-// tentar três vezes por servidor, de novo e de novo. As tentativas caíram de 24/min para 7–15/min
-// e nunca chegaram a zero.
-//
-// Por que zero importa: cada tentativa para máquina morta é uma conexão TCP pendurada até o prazo
-// (VPN não recusa, engole), e no iPhone isso mora dentro da extensão de rede do Tailscale, que tem
-// teto de 50 MB. Medida subindo de 35 para 45 MB enquanto a varredura corria; passando de certo
-// ponto, o laço de rede da extensão para, a VPN "cai" e só religando volta.
-//
-// Daí as duas decisões: UMA falha de rede basta (não três), e não há retomada por tempo — some o
-// relógio. E o estado é gravado, para o recarregamento do app não apagar o que já foi aprendido.
-
+// Falha de rede suspende as tentativas por um prazo persistido; resposta confirma a recuperação.
 import { registrar as registrarDiag } from './diag';
 
 const CHAVE = 'hangar_servidores_desligados';
 
-type Estado = { desligado: boolean };
+type Estado = { failures: number; retryAt: number };
+const RETRY_DELAYS_MS = [30_000, 60_000, 120_000, 240_000, 300_000, 600_000, 1_800_000];
 
 const estados = new Map<string, Estado>();
 let carregado = false;
 let avisouArmazem = false;
-// Servidor que nunca pode ser marcado (o ativo, o que serve esta página): a regra mora AQUI, não
-// em quem chama — `registrarFalha` também é chamado pelo apiFetch, e ali não há como saber.
+const recoveredListeners = new Set<(id: string) => void>();
+
+export function onServerRecovered(listener: (id: string) => void): () => void {
+  recoveredListeners.add(listener);
+  return () => { recoveredListeners.delete(listener); };
+}
+// A página saindo protege também os fetches cancelados pela navegação.
 let protegido: (id: string) => boolean = () => false;
 
-/** Quem decide se um servidor é intocável (o app web registra o ativo e o dono da página). */
+/** Permite ignorar falhas causadas pelo encerramento da página. */
 export function definirProtegido(fn: (id: string) => boolean): void {
   protegido = fn;
 }
@@ -47,7 +37,7 @@ export function definirArmazem(a: ArmazemEsfriamento | null): void {
   carregado = false;   // armazém novo, estado gravado novo
   // Marca feita ANTES da injeção (só em memória) não pode se perder: funde com o que está
   // gravado e persiste — `registrarFalha` só grava na transição, não gravaria de novo.
-  if ([...estados.values()].some((e) => e.desligado)) {
+  if (estados.size > 0) {
     carregar();
     gravar();
   }
@@ -70,8 +60,19 @@ function carregar(): void {
   }
   if (!bruto) return;
   try {
-    const ids: unknown = JSON.parse(bruto);
-    if (Array.isArray(ids)) for (const id of ids) if (typeof id === 'string') estados.set(id, { desligado: true });
+    const saved: unknown = JSON.parse(bruto);
+    if (Array.isArray(saved)) {
+      for (const id of saved) if (typeof id === 'string' && !estados.has(id)) {
+        estados.set(id, { failures: 1, retryAt: Date.now() + RETRY_DELAYS_MS[0] });
+      }
+      gravar(); // Migra a marca antiga uma vez, sem renovar o prazo a cada recarga.
+    } else if (saved && typeof saved === 'object') {
+      for (const [id, value] of Object.entries(saved)) {
+        if (!value || !Number.isInteger(value.failures) || value.failures < 1 ||
+          !Number.isFinite(value.retryAt)) continue;
+        if ((estados.get(id)?.retryAt ?? 0) <= value.retryAt) estados.set(id, value);
+      }
+    }
   } catch (e) {
     // Conteúdo estragado não pode impedir o app de subir: começa limpo — mas fica no diário,
     // senão "voltou a procurar todo mundo" não tem explicação.
@@ -80,9 +81,9 @@ function carregar(): void {
 }
 
 function gravar(): void {
-  const ids = [...estados.entries()].filter(([, e]) => e.desligado).map(([id]) => id);
+  const saved = Object.fromEntries(estados);
   try {
-    if (ids.length) armazem()?.setItem(CHAVE, JSON.stringify(ids));
+    if (estados.size) armazem()?.setItem(CHAVE, JSON.stringify(saved));
     else armazem()?.removeItem(CHAVE);
   } catch (e) {
     // Cota cheia ou modo privado: o estado segue valendo em memória nesta sessão, e NÃO sobrevive
@@ -99,17 +100,24 @@ export function avisarSemArmazem(e: unknown): void {
   registrarDiag({ evento: 'esfriamento.sem_armazem', nivel: 'aviso', detalhe: e instanceof Error ? e.message : String(e) });
 }
 
-/** Este servidor está marcado como desligado (e portanto não deve ser procurado)? */
+/** A última tentativa falhou e ainda não houve resposta que confirme a recuperação? */
 export function estaDesligado(id: string): boolean {
   carregar();
-  return estados.get(id)?.desligado === true;
+  return estados.has(id);
 }
 
-/** Falha de REDE (nenhuma resposta): marca como desligado na primeira vez. */
+/** Prazo até a próxima tentativa; expirar não é confirmação de que o servidor voltou. */
+export function retryAfterMs(id: string): number {
+  carregar();
+  return Math.max(0, (estados.get(id)?.retryAt ?? 0) - Date.now());
+}
+
+/** Falhas simultâneas não renovam o prazo; nova tentativa frustrada aumenta a espera. */
 export function registrarFalha(id: string): void {
   carregar();
-  if (protegido(id) || estados.get(id)?.desligado) return;
-  estados.set(id, { desligado: true });
+  if (protegido(id) || retryAfterMs(id) > 0) return;
+  const failures = Math.min((estados.get(id)?.failures ?? 0) + 1, RETRY_DELAYS_MS.length);
+  estados.set(id, { failures, retryAt: Date.now() + RETRY_DELAYS_MS[failures - 1] });
   gravar();
 }
 
@@ -118,9 +126,15 @@ export function registrarSucesso(id: string): void {
   carregar();
   if (!estados.delete(id)) return;
   gravar();
+  for (const listener of [...recoveredListeners]) {
+    try { listener(id); } catch (error) {
+      registrarDiag({ evento: 'esfriamento.reconexao_falhou', nivel: 'erro',
+        codigo: error instanceof Error ? error.name : 'erro' });
+    }
+  }
 }
 
-/** "Buscar agora": a pessoa mandou procurar. É o ÚNICO jeito de um servidor desligado voltar. */
+/** "Buscar agora": permite tentar de novo por ação da pessoa, sem aguardar uma resposta. */
 export function retentarAgora(id?: string): void {
   carregar();
   if (id === undefined) estados.clear();

@@ -4,7 +4,7 @@
 // obrigatoriamente no ativo. lib/api.ts é fechado neste plano; este módulo nasce novo.
 
 import * as m from '../paraglide/messages';
-import { errorDetail } from '@hangar/core';
+import { errorDetail, probeServerResponse } from '@hangar/core';
 import type { Server } from './auth';
 
 // Os QUATRO estados nomeados da linha. O backend manda ok/falhou/nao_configurado; o
@@ -29,18 +29,7 @@ export interface AlcanceDoServidor {
 }
 
 export async function alcanceDoServidor(s: Server, init?: RequestInit): Promise<AlcanceDoServidor> {
-  const res = await fetch(`${s.baseUrl}/api/alcance`, {
-    // Prazo por PADRAO, mesmo do apiFetchForServer: servidor atras de VPN nao recusa a
-    // conexao, o socket pendura e a promessa nunca resolve — sem prazo a tela ficaria
-    // em "Testando…" para sempre, sem erro nenhum.
-    signal: AbortSignal.timeout(8000),
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${s.token}`,
-      ...(init?.headers ?? {}),
-    },
-  });
+  const res = await probeServerResponse(s, '/api/alcance', init);
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
   return res.json() as Promise<AlcanceDoServidor>;
 }
@@ -55,13 +44,7 @@ export interface PareamentoDoServidor {
 }
 
 export async function pareamentoDoServidor(s: Server, endereco: TipoEndereco): Promise<PareamentoDoServidor> {
-  const res = await fetch(`${s.baseUrl}/api/alcance/pareamento?endereco=${encodeURIComponent(endereco)}`, {
-    signal: AbortSignal.timeout(8000),
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${s.token}`,
-    },
-  });
+  const res = await probeServerResponse(s, `/api/alcance/pareamento?endereco=${encodeURIComponent(endereco)}`);
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
   return res.json() as Promise<PareamentoDoServidor>;
 }

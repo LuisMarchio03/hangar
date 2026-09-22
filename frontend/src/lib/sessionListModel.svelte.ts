@@ -7,8 +7,8 @@ import { getActiveId, selectServer, serverColor } from './auth';
 import { formataErro } from '@hangar/core';
 import { sessionsStore } from './sessionsStore.svelte';
 import {
-  countAwaiting, effectiveGroupBy, groupSelectedByServer, projectKey, projectLabel, providerName,
-  sortSessions, type GroupBy,
+  clusterByPair, countAwaiting, effectiveGroupBy, groupRemotePairs, groupSelectedByServer, projectKey, projectLabel, providerName,
+  sortSessions, type GroupBy, type PairRow,
 } from '@hangar/core';
 import type { AggSession, ResumeCandidate, State } from '@hangar/core';
 import * as m from '../paraglide/messages';
@@ -36,6 +36,18 @@ export interface Group {
   color: string | null;
   error: string | null;
   sessions: AggSession[];
+  pair?: { id: string; label: string };
+}
+
+export function groupItems(group: Group): PairRow<AggSession>[] {
+  if (!group.pair) return clusterByPair(group.sessions);
+  const { id: gid, label } = group.pair;
+  return [
+    { kind: 'header', gid, label, count: group.sessions.length },
+    ...group.sessions.map((session, i): PairRow<AggSession> => ({
+      kind: 'session', session, gid, label, ultimo: i === group.sessions.length - 1,
+    })),
+  ];
 }
 
 export interface SessionListModelOptions {
@@ -106,45 +118,48 @@ export function createSessionListModel(opts: SessionListModelOptions) {
 
   const allGroups = $derived.by<Group[]>(() => {
     if (servers.length === 0) return [];
+    const remote = groupRemotePairs(rows, sessionsStore.identities ?? new Map());
+    const paired: Group[] = remote.groups.map(({ id, label, sessions }) => ({
+      id, label: '', color: null, error: null, sessions: sortSessions(sessions), pair: { id, label },
+    }));
     if (groupMode === 'none') {
-      return [{ id: '*', label: '', color: null, error: null, sessions: sortSessions([...rows]) }];
+      return [...paired, { id: '*', label: '', color: null, error: null, sessions: sortSessions(remote.unpaired) }];
     }
     if (groupMode === 'project') {
       const byKey = new Map<string, AggSession[]>();
-      for (const s of rows) {
+      for (const s of remote.unpaired) {
         const k = projectKey(s.cwd);
         const arr = byKey.get(k);
         if (arr) arr.push(s); else byKey.set(k, [s]);
       }
-      return [...byKey.entries()]
+      return [...paired, ...[...byKey.entries()]
         .map(([id, list]) => ({ id, label: projectLabel(list[0]?.cwd), color: null, error: null, sessions: sortSessions(list) }))
-        .sort((a, b) => a.label.localeCompare(b.label));
+        .sort((a, b) => a.label.localeCompare(b.label))];
     }
-    // "offline" só quando NÃO há lista: com lista stale o grupo mostra as sessões, não o aviso.
+    const pairedKeys = new Set(paired.flatMap(g => g.sessions.map(selectionKey)));
     const byServer: Group[] = sessionsStore.byServer.map((b) => ({
       id: b.server.id,
       label: b.server.label,
       color: serverColor(b.server.id),
-      error: b.loaded ? null : b.error,
-      sessions: sortSessions(b.sessions),
+      error: b.error,
+      sessions: sortSessions(b.sessions.filter(s => !pairedKeys.has(selectionKey(s)))),
     }));
-    if (rules.serverGroups === 'store-order') return byServer;
-    return byServer.filter((g) => g.sessions.length > 0).sort((a, b) => a.label.localeCompare(b.label));
+    if (rules.serverGroups === 'store-order') return [...paired, ...byServer];
+    return [...paired, ...byServer.filter((g) => g.sessions.length > 0).sort((a, b) => a.label.localeCompare(b.label))];
   });
 
   const groups = $derived.by<Group[]>(() => {
     const q = filterText.trim().toLowerCase();
     if (!q) return allGroups;
     return allGroups
-      .map((g) => ({
-        ...g,
-        sessions: g.sessions.filter(
-          (s) =>
-            s.name.toLowerCase().includes(q) ||
-            (s.cwd ?? '').toLowerCase().includes(q) ||
-            rules.filterLabel(s, g).toLowerCase().includes(q),
-        ),
-      }))
+      .map((g) => {
+        const matches = (s: AggSession) => s.name.toLowerCase().includes(q) ||
+          (s.cwd ?? '').toLowerCase().includes(q) || rules.filterLabel(s, g).toLowerCase().includes(q);
+        const sessions = g.pair
+          ? (g.pair.label.toLowerCase().includes(q) || g.sessions.some(matches) ? g.sessions : [])
+          : g.sessions.filter(matches);
+        return { ...g, sessions };
+      })
       .filter((g) => g.sessions.length > 0);
   });
   const flatRows = $derived(groups.flatMap((g) => g.sessions));
@@ -157,6 +172,10 @@ export function createSessionListModel(opts: SessionListModelOptions) {
   const filterEmpty = $derived(filterText.trim() !== '' && groups.length === 0);
   const showProviderTags = $derived(new Set(rows.map((s) => providerName(s.provider))).size > 1);
   const awaitingTotal = $derived(countAwaiting(allSessions));
+
+  function pairMembers(gid: string): AggSession[] {
+    return allGroups.find(g => g.pair?.id === gid)?.sessions ?? allSessions.filter(s => s.pair_gid === gid);
+  }
 
   function setGroupBy(mode: GroupBy) {
     groupBy = mode;
@@ -171,6 +190,7 @@ export function createSessionListModel(opts: SessionListModelOptions) {
     // cada volta. O gid renasce a cada pareamento, então o que não está mais na lista é podado
     // aqui mesmo, e o localStorage não acumula gid morto.
     const vivos = new Set(rows.map((s) => `pair:${s.pair_gid ?? ''}`));
+    for (const group of allGroups) if (group.pair) vivos.add(`pair:${group.pair.id}`);
     try {
       localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next].filter((k) => !k.startsWith('pair:') || vivos.has(k))));
     } catch { /* idem */ }
@@ -346,6 +366,7 @@ export function createSessionListModel(opts: SessionListModelOptions) {
     get awaitingTotal() { return awaitingTotal; },
     setGroupBy,
     toggleGroup,
+    pairMembers,
     get selectMode() { return selectMode; },
     get selected() { return selected; },
     get broadcastText() { return broadcastText; },

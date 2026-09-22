@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it, vi } from 'vitest';
 import { sessionsStore } from './sessionsStore.svelte';
-import { configureDiag, estaDesligado, retentarAgora, _limparEsfriamentoParaTestes } from '@hangar/core';
+import { getIdentificador } from './peers';
+import { configureDiag, estaDesligado, registrarFalha, registrarSucesso, _limparEsfriamentoParaTestes } from '@hangar/core';
 
 const streams = vi.hoisted(() => new Map<string, Map<string, (event: { data: string }) => void>>());
 const objetos = vi.hoisted(() => new Map<string, { onerror?: () => void; close: unknown; addEventListener: unknown }>());
@@ -13,6 +14,7 @@ vi.mock('./auth', () => ({
   getActiveId: () => 'lan',
 }));
 vi.mock('./navPelaLista', () => ({ navPelaLista: vi.fn() }));
+vi.mock('./peers', () => ({ getIdentificador: vi.fn(async (server: { id: string }) => ({ identificador: `backend-${server.id}` })) }));
 vi.mock('./navegadorPanel.svelte', () => ({
   podarNavMortos: vi.fn(),
   ouvirFechamentoNav: () => { navListener.start(); return navListener.stop; },
@@ -31,16 +33,152 @@ vi.mock('@hangar/core', async original => ({
 afterEach(() => { sessionsStore.release(); streams.clear(); objetos.clear(); connectionIds.clear(); vi.clearAllTimers(); vi.useRealTimers();
   configureDiag({ registrar: () => {}, novoReq: () => '' }); _limparEsfriamentoParaTestes(); });
 
-it('falha de rede marca só o servidor que não é o ativo; erro do produtor não marca ninguém', () => {
+it('falha real marca também o servidor ativo; erro do produtor não é queda de rede', () => {
   vi.useFakeTimers();
   sessionsStore.retain();
   objetos.get('lan')!.onerror!();
   objetos.get('vpn')!.onerror!();
-  expect(estaDesligado('lan')).toBe(false);   // ativo: intocável, continua sendo tentado
+  expect(estaDesligado('lan')).toBe(true);
   expect(estaDesligado('vpn')).toBe(true);
-  retentarAgora('vpn');
+  sessionsStore.buscarAgora('vpn');
   streams.get('vpn')!.get('list_error')!({ data: '' });
   expect(estaDesligado('vpn')).toBe(false);   // a máquina respondeu: não é rede
+});
+
+it('resposta recebida fora da lista retoma o stream e atualiza as sessões antigas', () => {
+  vi.useFakeTimers();
+  sessionsStore.retain();
+  const previous = objetos.get('vpn');
+  const first = { name: 'hangar', jsonl: '/hangar.jsonl', state: 'idle' };
+  streams.get('vpn')!.get('sessions')!({ data: JSON.stringify([first]) });
+  previous!.onerror!();
+  expect(estaDesligado('vpn')).toBe(true);
+  expect(sessionsStore.sessionsForServer('vpn')).toEqual([first]);
+
+  vi.advanceTimersByTime(29000);
+  expect(objetos.get('vpn')).toBe(previous);
+  const lan = objetos.get('lan');
+  registrarSucesso('vpn');
+  const recovered = objetos.get('vpn');
+  expect(recovered).not.toBe(previous);
+  expect(estaDesligado('vpn')).toBe(false);
+  streams.get('vpn')!.get('sessions')!({ data: JSON.stringify([first,
+    { name: 'setup-vm', jsonl: '/setup-vm.jsonl', state: 'working' }]) });
+  expect(sessionsStore.sessionsForServer('vpn').map(s => s.name)).toEqual(['hangar', 'setup-vm']);
+  registrarSucesso('vpn');
+  expect(objetos.get('vpn')).toBe(recovered);
+  expect(objetos.get('lan')).toBe(lan);
+});
+
+it('servidor desligado antes da montagem aguarda o prazo; reconexão explícita tenta agora', () => {
+  registrarFalha('vpn');
+  sessionsStore.retain();
+  expect(objetos.has('vpn')).toBe(false);
+  expect(sessionsStore.byServer.find(s => s.server.id === 'vpn')?.error).toBe('offline');
+  sessionsStore.refreshServers();
+  expect(estaDesligado('vpn')).toBe(true);
+  expect(objetos.has('vpn')).toBe(false);
+  sessionsStore.reconnect();
+  expect(estaDesligado('vpn')).toBe(false);
+  expect(objetos.has('vpn')).toBe(true);
+});
+
+it('descobre a identidade apenas após quadro válido com pareamento remoto, uma vez por conexão', async () => {
+  vi.mocked(getIdentificador).mockClear();
+  registrarFalha('vpn');
+  sessionsStore.retain();
+  expect(getIdentificador).not.toHaveBeenCalled();
+  const publish = streams.get('lan')!.get('sessions')!;
+  publish({ data: '[]' });
+  expect(getIdentificador).not.toHaveBeenCalled();
+  const data = JSON.stringify([{ name: 'a', jsonl: '/a', pair_peers: ['backend-vpn::b'] }]);
+  publish({ data });
+  publish({ data });
+  await vi.waitFor(() => expect(sessionsStore.identities.get('lan')).toBe('backend-lan'));
+  expect(getIdentificador).toHaveBeenCalledTimes(1);
+  expect(estaDesligado('vpn')).toBe(true);
+});
+
+it('não reabre conexões quando a lista já foi desmontada', () => {
+  sessionsStore.retain();
+  const previous = objetos.get('vpn');
+  previous!.onerror!();
+  sessionsStore.release();
+  registrarSucesso('vpn');
+  expect(objetos.get('vpn')).toBe(previous);
+});
+
+it('retentar um remoto não cancela a recuperação já pendente do servidor ativo', () => {
+  vi.useFakeTimers();
+  sessionsStore.retain();
+  const lan = objetos.get('lan');
+  lan!.onerror!();
+  objetos.get('vpn')!.onerror!();
+  sessionsStore.buscarAgora('vpn');
+  expect(objetos.get('lan')).toBe(lan);
+  vi.advanceTimersByTime(30000);
+  expect(objetos.get('lan')).not.toBe(lan);
+});
+
+it('retoma automaticamente após o prazo, mantendo offline até uma resposta válida', () => {
+  vi.useFakeTimers();
+  sessionsStore.retain();
+  const previous = objetos.get('vpn');
+  previous!.onerror!();
+  vi.advanceTimersByTime(30000);
+  expect(objetos.get('vpn')).not.toBe(previous);
+  expect(estaDesligado('vpn')).toBe(true);
+  streams.get('vpn')!.get('sessions')!({ data: JSON.stringify([{ name: 'voltou', jsonl: '/v' }]) });
+  expect(estaDesligado('vpn')).toBe(false);
+  expect(sessionsStore.rows.some(s => s.name === 'voltou')).toBe(true);
+});
+
+it('remontar respeita o restante do prazo e o timeout também agenda outra tentativa', () => {
+  vi.useFakeTimers();
+  sessionsStore.retain();
+  objetos.get('vpn')!.onerror!();
+  vi.advanceTimersByTime(20000);
+  sessionsStore.release();
+  sessionsStore.retain();
+  const previous = objetos.get('vpn');
+  vi.advanceTimersByTime(9999);
+  expect(objetos.get('vpn')).toBe(previous);
+  vi.advanceTimersByTime(1);
+  const silent = objetos.get('vpn');
+  expect(silent).not.toBe(previous);
+  vi.advanceTimersByTime(10000);
+  expect(silent!.close).toHaveBeenCalled();
+  vi.advanceTimersByTime(60000);
+  expect(objetos.get('vpn')).not.toBe(silent);
+});
+
+it('Ctrl+R não grava offline quando o navegador cancela as conexões da página antiga', () => {
+  sessionsStore.retain();
+  const previous = objetos.get('vpn');
+  streams.get('vpn')!.get('sessions')!({ data: '[]' });
+  window.dispatchEvent(new Event('beforeunload'));
+  previous!.onerror!();
+  registrarFalha('vpn'); // fetch cancelado pela navegação também não é queda da máquina
+  expect(estaDesligado('vpn')).toBe(false);
+  window.dispatchEvent(new Event('pagehide'));
+  window.dispatchEvent(new Event('pageshow'));
+  expect(objetos.get('vpn')).not.toBe(previous);
+  expect(estaDesligado('vpn')).toBe(false);
+});
+
+it('erro e timer da conexão descartada não derrubam a conexão nova', () => {
+  vi.useFakeTimers();
+  sessionsStore.retain();
+  const previous = objetos.get('vpn');
+  vi.advanceTimersByTime(5000);
+  sessionsStore.reconnect();
+  const current = objetos.get('vpn');
+  streams.get('vpn')!.get('sessions')!({ data: '[]' });
+  previous!.onerror!();
+  vi.advanceTimersByTime(5000);
+  expect(estaDesligado('vpn')).toBe(false);
+  expect(current!.close).not.toHaveBeenCalled();
+  expect(objetos.get('vpn')).toBe(current);
 });
 
 it('passa à abertura da lista o mesmo ID registrado em cada servidor', () => {
@@ -87,9 +225,12 @@ it('registra primeiro quadro, parse inválido, silêncio e volta sem copiar quad
   publicar('segredo conversa token');
   publicar('[]');
   expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ codigo: 'json_invalido' }), 'http://lan');
-  expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'lista.voltou' }), 'http://lan');
+  expect(estaDesligado('lan')).toBe(false);
   await vi.advanceTimersByTimeAsync(25000);
   expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ codigo: 'silencio', espera_ms: 25000 }), 'http://lan');
-  expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'lista.retentativa', espera_ms: 5000 }), 'http://lan');
+  expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'lista.retentativa', espera_ms: 30000 }), 'http://lan');
+  await vi.advanceTimersByTimeAsync(30000);
+  publicar('[]');
+  expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'lista.voltou' }), 'http://lan');
   expect(JSON.stringify(registrar.mock.calls.map(([e]) => e))).not.toMatch(/segredo|conversa|token|http:/);
 });

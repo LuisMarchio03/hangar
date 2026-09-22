@@ -6,7 +6,7 @@ import { localeAtual } from './i18n';
 import { mensagemDeErro, formataErro, type EnvelopeErro } from './errosApi';
 // diag NÃO importa api (ele usa `fetch` direto) — é o que mantém esta dependência de mão única.
 import { registrar as registrarDiag, novoReq } from './diag';
-import { estaDesligado, registrarFalha, registrarSucesso } from './esfriamento';
+import { retryAfterMs, registrarFalha, registrarSucesso } from './esfriamento';
 import type { CotaContaResumo } from './cotaResumo';
 import type { UsoFiltros, UsoReport } from './uso';
 import type {
@@ -219,16 +219,15 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 // quem precisa do STATUS ou de um header — hoje o histórico condicional (304 + ETag), que não tem
 // corpo pra desserializar e cujo status não é erro. O diário e o rastreio de "sem rede/voltou"
 // ficam aqui: um fetch escrito à mão sairia do registro sem ninguém notar.
-async function apiFetchRes(path: string, init?: RequestInit, server?: Server): Promise<Response> {
+async function apiFetchRes(path: string, init?: RequestInit, server?: Server, probe = false): Promise<Response> {
   const base = server?.baseUrl ?? apiEnv().getBaseUrl();
   const url = `${base}${path}`;
   const t0 = Date.now();
   // Id do pedido: vai no cabeçalho e na linha do diário dos DOIS lados, pra quem analisa seguir a
   // cadeia (o toque na tela -> o que o servidor fez) sem depender de comparar horário.
   const req = novoReq();
-  // Servidor esfriando: recusa aqui, sem abrir socket. Só vale pra chamada a OUTRO servidor — o
-  // local não tem rede no meio, e barrar a própria máquina deixaria o app mudo por engano.
-  if (server && estaDesligado(server.id)) {
+  // Durante a espera, só uma verificação explícita pode antecipar a nova tentativa.
+  if (server && retryAfterMs(server.id) > 0 && !probe) {
     throw new Error(m.esfriamento_servidor_desligado({ servidor: server.label },
                                                      { locale: localeAtual() }));
   }
@@ -255,12 +254,13 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server): P
     // já traça pro resto do app. Quem for abortar por um motivo NOVO (um teto de tempo escrito à
     // mão, por exemplo, em vez do `AbortSignal.timeout`) precisa saber disto: por este caminho a
     // falha some do diário sem deixar rastro.
-    if (!isAbortError(e)) {
+    const timedOut = init?.signal?.aborted && init.signal.reason?.name === 'TimeoutError';
+    if (!isAbortError(e) || timedOut) {
       const rota = `${(init?.method ?? 'GET').toUpperCase()} ${rotaGenerica(path)}`;
       const poll = rota.startsWith('GET ');
       if (!poll || !_semRede.has(`${base}|${rota}`)) {
         registrarDiag({ evento: 'api.sem_rede', nivel: 'erro', ms: Date.now() - t0, req, detalhe: rota,
-          codigo: e instanceof Error && e.name === 'TimeoutError' ? 'timeout' : 'rede' }, base);
+          codigo: timedOut || (e instanceof Error && e.name === 'TimeoutError') ? 'timeout' : 'rede' }, base);
       }
       if (poll) _semRede.add(`${base}|${rota}`);
       // Só falha de REDE esfria (o `isAbortError` acima já tirou o cancelamento de quem chamou).
@@ -307,6 +307,11 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server): P
     }, base);
   }
   return res;
+}
+
+/** Verificação explícita: pode consultar um servidor offline, usando o mesmo registro de rede. */
+export function probeServerResponse(server: Server, path: string, init?: RequestInit): Promise<Response> {
+  return apiFetchRes(path, { signal: AbortSignal.timeout(8000), ...init }, server, true);
 }
 
 // Configurações abertas a partir da visão agregada precisam continuar no servidor capturado, sem

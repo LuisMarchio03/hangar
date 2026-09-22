@@ -7,6 +7,7 @@ import { mount, unmount, tick, createRawSnippet } from 'svelte';
 import Sidebar from './Sidebar.svelte';
 import * as auth from '../lib/auth';
 import { abrirConfig } from '../lib/configNav';
+import { sessionsStore } from '../lib/sessionsStore.svelte';
 import { overwriteGetLocale } from '../paraglide/runtime';
 
 // Snippet criado DENTRO de cada factory: vi.mock é hoisted; function declaration é hoisted também
@@ -74,6 +75,7 @@ vi.mock('../lib/auth', () => ({
 vi.mock('../lib/sessionsStore.svelte', () => ({
   sessionsStore: {
     retain: vi.fn(), release: vi.fn(),
+    buscarAgora: vi.fn(),
     markDeleting: vi.fn(), unmarkDeleting: vi.fn(),
     byServer: storeState.byServer, rows: storeState.rows, servers: storeState.servers,
     loading: false,
@@ -978,4 +980,36 @@ describe('Sidebar — arrastar sessão sobre sessão (Task 3)', () => {
     expect(arrastarGrupo.pedido).toBeNull();
     unmount(t.comp);
   });
+});
+
+it.each(['none', 'project', 'server'] as const)('mantém offline no resumo em %s e expandir não procura servidores', async mode => {
+  const previous = { servers: [...storeState.servers], rows: [...storeState.rows], byServer: [...storeState.byServer] };
+  const grouping = vi.spyOn(api, 'effectiveGroupBy').mockReturnValue(mode);
+  const online = { id: 'lan', label: 'LAN', baseUrl: 'http://lan', token: 'x' };
+  const offline = { id: 'vpn', label: 'VPN', baseUrl: 'http://vpn', token: 'x' };
+  const cached = { name: 'cached', serverId: 'vpn', serverLabel: 'VPN', state: 'idle', provider: 'claude' };
+  storeState.servers.splice(0, Infinity, online, offline);
+  storeState.rows.splice(0, Infinity, cached);
+  storeState.byServer.splice(0, Infinity,
+    { server: online, sessions: [], error: null, loaded: true },
+    { server: offline, sessions: [cached], error: 'offline', loaded: true });
+  const t = montar();
+  try {
+    await tick();
+    const summary = t.el.querySelector<HTMLButtonElement>('.grp-offline-sum')!;
+    expect(summary).not.toBeNull();
+    expect(summary.getAttribute('aria-expanded')).toBe('false');
+    expect(t.el.querySelector('.grp-off')).toBeNull();
+    summary.click();
+    await tick();
+    expect(t.el.querySelector('.grp-off')).not.toBeNull();
+    expect(sessionsStore.buscarAgora).not.toHaveBeenCalled();
+    t.el.querySelector<HTMLButtonElement>('[aria-label="Reconectar: VPN"]')!.click();
+    expect(sessionsStore.buscarAgora).toHaveBeenCalledExactlyOnceWith('vpn');
+  } finally {
+    await unmount(t.comp); t.el.remove(); grouping.mockRestore();
+    storeState.servers.splice(0, Infinity, ...previous.servers);
+    storeState.rows.splice(0, Infinity, ...previous.rows);
+    storeState.byServer.splice(0, Infinity, ...previous.byServer);
+  }
 });

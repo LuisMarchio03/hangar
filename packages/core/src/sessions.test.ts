@@ -44,10 +44,19 @@ describe('aggregateSessions', () => {
     expect(a.rows).toEqual([]);
   });
 
-  it('servidor offline com lista STALE: mantém as linhas E o error (consumidor decide)', () => {
+  it('servidor offline com cache não exibe sessões antigas como disponíveis', () => {
     const a = aggregateSessions([srv('a')], slots({ a: { sessions: [sess('x')], error: 'offline' } }));
     expect(a.byServer[0]).toMatchObject({ error: 'offline', loaded: true });
-    expect(a.rows.map((r) => r.name)).toEqual(['x']);
+    expect(a.rows).toEqual([]);
+  });
+
+  it('rota offline não esconde a mesma sessão da rota local saudável', () => {
+    const duplicate = sess('x');
+    const a = aggregateSessions([srv('vpn'), srv('local')], slots({
+      vpn: { sessions: [duplicate], error: 'offline' },
+      local: { sessions: [duplicate], error: null },
+    }));
+    expect(a.rows.map(r => r.serverId)).toEqual(['local']);
   });
 
   it('loading: true só enquanto NENHUM servidor emitiu evento nem erro', () => {

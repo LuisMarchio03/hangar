@@ -316,9 +316,11 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   `estranho` (atendeu OUTRA máquina) é tipo próprio antes do `parcial` e abre a correção; e
   "sem identificador" separa token recusado, máquina fora do ar e nome vazio — este último com
   campo no detalhe de qualquer servidor com token aqui.
-- **Servidor que não responde é marcado como DESLIGADO na primeira falha de rede, e só volta a ser
-  procurado quando a pessoa mandar** — sem retomada por tempo, e a marca é gravada (o iOS recarrega
-  o PWA sozinho e apagaria um contador em memória). Erro HTTP não conta: a máquina respondeu.
+- **Servidor que não responde sai da lista de sessões e volta a ser procurado automaticamente**:
+  espera de 30 s, 1 min, 2 min, 4 min, 5 min, 10 min e depois 30 min, mantendo esse teto.
+  Prazo e contagem são persistidos para sobreviver à recarga.
+  Só uma resposta confirma a recuperação; expirar o prazo apenas permite nova tentativa.
+  Erro HTTP e cancelamento da página não são queda de rede. Reconectar permite tentar antes.
 - **Revisão de código:** neste repositório, revisão local e as verificações do projeto.
 - **MCP `hangar` (`/mcp`): identidade do chamador vai no cabeçalho e o backend resolve.** Chave
   vence pane, pane vence nome, pane ambíguo não resolve, nada resolvido é erro (nunca `cli`). O
