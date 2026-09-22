@@ -19,8 +19,11 @@
     lastCache?: UltimoCache | null;
     title?: string;
     conta?: ContaChip | null;
+    // Banner de limite lido do pane: o chip dele abre esta folha, então ela tem que dizer quando volta.
+    limited?: boolean;
+    limitReset?: string | null;
   }
-  let { open, status, onClose, stats = null, lastCache = null, title, conta = null }: Props = $props();
+  let { open, status, onClose, stats = null, lastCache = null, title, conta = null, limited = false, limitReset = null }: Props = $props();
 
   const known = (n: unknown): n is number => typeof n === 'number' && isFinite(n);
   const clamp = (n: number) => Math.min(100, Math.max(0, n));
@@ -29,12 +32,12 @@
 
   const janelas = $derived.by(() => {
     const s = status;
-    if (!s) return [] as { label: string; pct: number; reset?: string }[];
-    return [
-      { label: m.uso_janela_5h(), pct: s.fiveHourPct, reset: s.fiveHourReset },
-      { label: m.uso_janela_7d(), pct: s.weeklyPct, reset: s.weeklyReset },
-      { label: m.uso_janela_30d(), pct: s.monthlyPct, reset: s.monthlyReset },
-    ].filter((j): j is { label: string; pct: number; reset?: string } => known(j.pct));
+    const out: { label: string; pct: number; reset?: string }[] = [];
+    if (!s) return out;
+    if (known(s.fiveHourPct)) out.push({ label: m.uso_janela_5h(), pct: s.fiveHourPct, reset: s.fiveHourReset });
+    if (known(s.weeklyPct)) out.push({ label: m.uso_janela_7d(), pct: s.weeklyPct, reset: s.weeklyReset });
+    if (known(s.monthlyPct)) out.push({ label: m.uso_janela_30d(), pct: s.monthlyPct, reset: s.monthlyReset });
+    return out;
   });
 
   // O prazo anda com o relógio, mas só enquanto a folha está aberta.
@@ -82,7 +85,7 @@
   });
 
   const temConversa = $derived(known(ctxPct) || !!lastCache || !!status?.repo || linhas.length > 0);
-  const vazio = $derived(!janelas.length && !temConversa && !numeros.length && !status?.raw);
+  const vazio = $derived(!limited && !janelas.length && !temConversa && !numeros.length && !status?.raw);
 </script>
 
 <BottomSheet {open} {onClose} ariaLabel={m.uso_aria()} centered={desktop.atual}>
@@ -100,9 +103,15 @@
       <p class="usage-vazio">{m.uso_vazio()}</p>
     {/if}
 
-    {#if janelas.length}
+    {#if janelas.length || limited}
       <section class="usage-sec">
         <h3 class="usage-sec-title">{m.uso_secao_cota()}</h3>
+        {#if limited}
+          <div class="usage-row">
+            <span class="usage-label">{m.sessao_limite()}</span>
+            <span class="usage-value usage-limite">{limitReset ? m.rate_volta({ quando: limitReset }) : m.rate_limitado()}</span>
+          </div>
+        {/if}
         {#each janelas as j}
           <div class="medidor tone-{tone(j.pct)}">
             <div class="medidor-head"><span>{j.label}</span><span class="medidor-pct">{Math.round(clamp(j.pct))}%</span></div>
@@ -196,6 +205,7 @@
   .usage-value { font-size: var(--text-sm); color: var(--text-primary); text-align: right; min-width: 0; overflow-wrap: anywhere; }
   .mono { font-family: var(--font-mono); }
   .usage-dirty { display: block; font-size: var(--text-xs); color: var(--warning); }
+  .usage-limite { color: var(--warning); font-weight: 600; }
   .cache { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
   .cache-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
   .cache.acabando { color: var(--warning); }

@@ -2037,7 +2037,9 @@ import { cachePrazo } from '../lib/cachePrazo';
       {#if status?.ctxPct != null}
         {#if onOpenUsage}
           <button class="ctx-ring-btn" onclick={onOpenUsage} aria-label={m.uso_aria()}>
-            <ContextRing pct={status.ctxPct} size={22} />
+            <!-- Widget dentro de botão: o meter seria lido de novo ao navegar por dentro. O valor
+                 está na folha que o botão abre. -->
+            <span class="ctx-ring-mudo" aria-hidden="true"><ContextRing pct={status.ctxPct} size={22} /></span>
           </button>
         {:else}
           <ContextRing pct={status.ctxPct} size={22} />
@@ -3121,6 +3123,7 @@ import { cachePrazo } from '../lib/cachePrazo';
     flex-shrink: 0;
   }
   .ctx-ring-btn:active { background: var(--bg-hover); }
+  .ctx-ring-mudo { display: inline-flex; }
 
   /* Pareada: chip acende no accent (o 🤝 sem par fica na cor muted padrão do repo-chip). */
   .pair-chip--on { color: var(--accent); }

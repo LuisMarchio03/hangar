@@ -3185,7 +3185,7 @@
                    onNavigateToChat={onNavigateToChat} />
   {/if}
 
-  <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} stats={statsEvent} {lastCache} title={sessionName} conta={desktop ? null : contaChip} />
+  <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} stats={statsEvent} {lastCache} title={sessionName} conta={desktop ? null : contaChip} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} />
   <BtwSheet open={btwOpen} {sessionName} pergunta={btwPergunta} onClose={() => (btwOpen = false)} />
 
   <Git open={gitOpen} {sessionName} {desktop} {filesInContext} initialTab={gitInitialTab} onClose={() => { gitOpen = false; gitInitialTab = 'changes'; }}
