@@ -99,6 +99,29 @@ it('descobre a identidade apenas após quadro válido com pareamento remoto, uma
   expect(estaDesligado('vpn')).toBe(true);
 });
 
+it('repete a identidade após falha transitória, com intervalo e sem reabrir o stream', async () => {
+  vi.useFakeTimers();
+  vi.mocked(getIdentificador).mockClear();
+  vi.mocked(getIdentificador).mockRejectedValueOnce(new Error('timeout'));
+  const registrar = vi.fn();
+  configureDiag({ registrar, novoReq: () => 'identity-retry' });
+  sessionsStore.retain();
+  const original = objetos.get('lan');
+  const publish = streams.get('lan')!.get('sessions')!;
+  const data = JSON.stringify([{ name: 'a', jsonl: '/a', pair_peers: ['backend-vpn::b'] }]);
+  publish({ data });
+  await vi.waitFor(() => expect(registrar).toHaveBeenCalledWith(
+    expect.objectContaining({ evento: 'lista.identificador_falhou' }), 'http://lan'));
+  publish({ data });
+  expect(getIdentificador).toHaveBeenCalledTimes(1);
+  vi.setSystemTime(Date.now() + 30000);
+  streams.get('lan')!.get('ping')!({ data: '' });
+  await vi.waitFor(() => expect(sessionsStore.identities.get('lan')).toBe('backend-lan'));
+  expect(getIdentificador).toHaveBeenCalledTimes(2);
+  expect(objetos.get('lan')).toBe(original);
+  expect(original!.close).not.toHaveBeenCalled();
+});
+
 it('não reabre conexões quando a lista já foi desmontada', () => {
   sessionsStore.retain();
   const previous = objetos.get('vpn');
@@ -118,6 +141,26 @@ it('retentar um remoto não cancela a recuperação já pendente do servidor ati
   expect(objetos.get('lan')).toBe(lan);
   vi.advanceTimersByTime(30000);
   expect(objetos.get('lan')).not.toBe(lan);
+});
+
+it.each(['vpn', undefined])('buscarAgora(%s) reabre o produtor com erro sem interromper o servidor saudável', (id) => {
+  sessionsStore.retain();
+  const healthy = objetos.get('lan');
+  const failed = objetos.get('vpn');
+  streams.get('vpn')!.get('list_error')!({ data: '' });
+  expect(estaDesligado('vpn')).toBe(false);
+  expect(sessionsStore.byServer.find(s => s.server.id === 'vpn')?.error).toBeTruthy();
+
+  sessionsStore.buscarAgora(id);
+  expect(failed!.close).toHaveBeenCalledOnce();
+  expect(objetos.get('vpn')).not.toBe(failed);
+  expect(objetos.get('lan')).toBe(healthy);
+  expect(healthy!.close).not.toHaveBeenCalled();
+  failed!.onerror!();
+  expect(estaDesligado('vpn')).toBe(false);
+  streams.get('vpn')!.get('sessions')!({ data: JSON.stringify([{ name: 'recovered', jsonl: '/r' }]) });
+  expect(sessionsStore.byServer.find(s => s.server.id === 'vpn')?.error).toBeNull();
+  expect(sessionsStore.rows.some(s => s.name === 'recovered')).toBe(true);
 });
 
 it('retoma automaticamente após o prazo, mantendo offline até uma resposta válida', () => {

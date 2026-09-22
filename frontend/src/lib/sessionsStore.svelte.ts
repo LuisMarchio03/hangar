@@ -125,6 +125,22 @@ function createSessionsStore() {
       streams.set(s.id, es);
       const isCurrent = () => !leavingPage && refs > 0 && streams.get(s.id) === es;
       let identityRequested = false;
+      let identityRetryAt = 0;
+      let identityNeeded = false;
+      const loadIdentity = () => {
+        if (!isCurrent() || !identityNeeded || identityRequested || Date.now() < identityRetryAt) return;
+        identityRequested = true;
+        void getIdentificador(s).then(({ identificador }) => {
+          if (!isCurrent() || !identificador) return;
+          identities = new Map(identities).set(s.id, identificador);
+        }).catch((error: unknown) => {
+          if (!isCurrent()) return;
+          identityRequested = false;
+          identityRetryAt = Date.now() + 30_000;
+          registrarDiag({ evento: 'lista.identificador_falhou', nivel: 'aviso',
+            codigo: error instanceof Error ? error.name : 'erro' }, s.baseUrl);
+        });
+      };
       if (identities.has(s.id)) { const next = new Map(identities); next.delete(s.id); identities = next; }
       const tentativa = (tentativas.get(s.id) ?? 0) + 1;
       tentativas.set(s.id, tentativa);
@@ -226,6 +242,7 @@ function createSessionsStore() {
         cancelarPrazo();
         registrarSucesso(s.id);
         arm();
+        loadIdentity();
       });
       es.addEventListener('sessions', (e) => {
         if (!isCurrent()) return;
@@ -236,17 +253,9 @@ function createSessionsStore() {
           const sessions = JSON.parse(e.data);
           if (!Array.isArray(sessions)) throw new Error('sessions frame must be an array');
           slots.set(s.id, { sessions, error: null });
-          if (!identityRequested && sessions.some((session: { pair_peers?: string[] }) =>
-            session.pair_peers?.some(peer => peer.includes('::')))) {
-            identityRequested = true;
-            void getIdentificador(s).then(({ identificador }) => {
-              if (!isCurrent() || !identificador) return;
-              identities = new Map(identities).set(s.id, identificador);
-            }).catch((error: unknown) => {
-              registrarDiag({ evento: 'lista.identificador_falhou', nivel: 'aviso',
-                codigo: error instanceof Error ? error.name : 'erro' }, s.baseUrl);
-            });
-          }
+          identityNeeded = sessions.some((session: { pair_peers?: string[] }) =>
+            session.pair_peers?.some(peer => peer.includes('::')));
+          loadIdentity();
           const caiuEm = quedas.get(s.id);
           if (primeiroValido || caiuEm !== undefined) {
             registrarDiag({ evento: caiuEm === undefined ? 'lista.conectou' : 'lista.voltou',
@@ -413,6 +422,14 @@ function createSessionsStore() {
       for (const [key, timer] of retryTimers) {
         if (id !== undefined && key !== id) continue;
         clearTimeout(timer); retryTimers.delete(key);
+      }
+      for (const [key, es] of streams) {
+        if (id !== undefined ? key !== id : !slots.get(key)?.error) continue;
+        streams.delete(key);
+        es.close();
+        for (const timers of [watchdogs, primeiros]) {
+          clearTimeout(timers.get(key)); timers.delete(key);
+        }
       }
       connect(servers, id);
     },
