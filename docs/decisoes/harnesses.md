@@ -145,6 +145,42 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `|| exit 0`. O aviso não pode conter token terminado em `.py` — é por ele que o instalador
   reconhece a própria entrada. **Prompt barrado por hook (de qualquer origem) vira bolha "não
   chegou" com o erro do hook**, seja recado ou fala da pessoa.
+- **Erro ao LER de um cano encerra o loop de leitura; só erro de MENSAGEM segue adiante.** Um
+  `StreamReader` guarda a exceção de transporte e a relevanta em toda leitura seguinte sem nunca
+  suspender: `continue` ali vira laço quente que não cede o event loop nem aceita cancel, e cada
+  relevantada empilha frames no MESMO traceback, então o `logger.exception` custa quadrático.
+  Leitura e processamento vão em `try` separados.
+
+## Erro de leitura tratado como erro de linha trava o backend inteiro
+
+Fechar uma sessão Codex sem terminal derrubava o backend, e "derrubava" é literal: processo vivo,
+porta 8765 aceitando conexão, nenhuma resposta saindo. Aconteceu 7 vezes entre 14 e 21/09/2026
+(`hangar-vigia.log`).
+
+No Windows o cano fechado não chega como EOF — chega como `ConnectionResetError` (WinError 64).
+O `_read_loop` do `adapters/codex/appserver.py` tratava qualquer `Exception` como erro daquela
+linha: logava e `continue`. Mas `readline()` não lê a próxima linha — o `StreamReader` guardou a
+exceção (`streams.py`: `raise self._exception`) e relevanta a MESMA, sem passar por ponto de
+suspensão. Três consequências, todas medidas:
+
+1. O loop nunca cede o event loop → o backend inteiro para de responder.
+2. `task.cancel()` do `close()` nunca chega a agir — não há ponto de suspensão onde o cancel pegue.
+3. `raise` do mesmo objeto APENSA frames ao traceback dele. Medido: +3 frames por volta. Aos
+   ~12.500 frames, cada `logger.exception` reformatava tudo, com `ast.parse` por frame
+   (`_should_show_carets`) — custo quadrático, 1,6 MB/s de log, 230 MB em minutos, e as 4
+   rotações de `backend.log` consumidas no mesmo segundo levaram junto o histórico útil.
+
+O "não sobe de novo" é consequência: uvicorn atende sinal pelo event loop, que está travado, então
+o processo não morre e segura a porta — e `Restart-HangarTask` recusa subir instância nova com a
+porta ocupada (`scripts/windows-tasks.ps1`), enquanto a vigia só age com o processo há mais de
+10 minutos no ar.
+
+Antes e depois no mesmo `backend.log`, mesmo WinError 64: 11:53 (antigo) 3 entradas de ~12.500
+linhas cada; 11:54 (novo) uma linha INFO e o loop encerrado, backend respondendo em 8 ms.
+
+Regressão coberta por `test_transport_error_on_read_ends_loop_instead_of_spinning`, que conta
+registros de log e aborta no teto — sem isso a volta do bug travaria a suíte em vez de falhar,
+já que nenhum timeout async chega a rodar num loop que não suspende.
 
 ## Troca de provider durante o SSE
 
