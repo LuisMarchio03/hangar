@@ -16,7 +16,9 @@
     // recurso escasso la). 'bars' e pro painel do desktop, que tem 248px de coluna e ja mostra o
     // contexto em barra logo acima: la o anel comprimia 5h e 7d em dois arcos de ~40px que so se
     // leem de perto, enquanto sobra largura pra duas barras rotuladas.
-    variant?: 'dial' | 'bars';
+    // 'chip' e o topo do chat no celular: so a janela mais cheia, em texto de 12px ("5h 15%"). O
+    // detalhe das outras janelas fica na folha que o toque abre.
+    variant?: 'dial' | 'bars' | 'chip';
   }
   let { status, onExpand, limited = false, limitReset = null, variant = 'dial' }: Props = $props();
 
@@ -65,6 +67,12 @@
 
   // 100% e o unico valor de 3 digitos: com o rotulo na frente o par estoura os 24,5px uteis do
   // miolo (medido: 26,7px), entao numero e rotulo encolhem juntos SO nesse caso.
+  const cheia = $derived(
+    !known(week) || (known(five) && clamp(five) >= clamp(week))
+      ? { cap: m.rate_5h_curto(), pct: five }
+      : { cap: m.rate_7d_curto(), pct: week },
+  );
+
   const wide5 = $derived(Math.round(clamp(five)) >= 100);
   const wide7 = $derived(Math.round(clamp(week)) >= 100);
 
@@ -105,6 +113,10 @@
             {#if status?.monthlyReset}<span class="bar-reset">{m.rate_reseta({ quando: status.monthlyReset })}</span>{/if}
           </span>
         {/if}
+      </button>
+    {:else if hasDial && variant === 'chip'}
+      <button class="qchip tone-chip-{tone(cheia.pct)}" onclick={onExpand} aria-label={a11y} title={a11y}>
+        <span class="qchip-body"><span class="qchip-cap">{cheia.cap}</span><span class="qchip-pct">{label(cheia.pct)}%</span></span>
       </button>
     {:else if hasDial}
       <button class="dial tone-5-{tone(five)} tone-7-{tone(week)}" onclick={onExpand} aria-label={a11y} title={a11y}>
@@ -315,6 +327,46 @@
     color: var(--text-secondary);
     white-space: nowrap;
   }
+  /* Alvo de 44px de altura; o desenho e a pilula de 26px dentro. */
+  .qchip {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0 var(--space-1);
+    flex-shrink: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .qchip-body {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 9px;
+    box-sizing: border-box;
+    border-radius: var(--radius-full);
+    background: var(--fill-subtle);
+    border: 1px solid var(--border-default);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    transition: background 300ms ease, border-color 300ms ease;
+  }
+  .qchip:active .qchip-body { background: var(--bg-hover); }
+  .qchip-cap { color: var(--text-muted); }
+  .qchip-pct { color: var(--text-primary); font-weight: 600; }
+  /* Mesmos limiares do anel e das barras — 70 ambar, 90 vermelho. */
+  .qchip.tone-chip-warn .qchip-body {
+    background: color-mix(in srgb, var(--warning) 12%, transparent);
+    border-color: color-mix(in srgb, var(--warning) 28%, transparent);
+  }
+  .qchip.tone-chip-warn .qchip-pct { color: var(--warning); }
+  .qchip.tone-chip-hot .qchip-body {
+    background: color-mix(in srgb, var(--error) 12%, transparent);
+    border-color: color-mix(in srgb, var(--error) 30%, transparent);
+  }
+  .qchip.tone-chip-hot .qchip-pct { color: var(--error); }
+
   .rchip.warm { color: var(--warning); }
   /* Mesmos limiares do anel e das barras — 70 ambar, 90 vermelho. */
   .rchip.tone-chip-warn { color: var(--warning); }

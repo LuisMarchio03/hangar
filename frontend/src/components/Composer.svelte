@@ -38,6 +38,8 @@
   import IconComandos from './icons/IconComandos.svelte';
   import IconOrquestrar from './icons/IconOrquestrar.svelte';
   import IconFolder from './icons/IconFolder.svelte';
+import { fmtDur } from '../lib/fmt';
+import { cachePrazo } from '../lib/cachePrazo';
   import { prepareImage } from '../lib/imagePrep';
   import ContextRing from './ContextRing.svelte';
   import ClaudeModelPopover from './ClaudeModelPopover.svelte';
@@ -84,6 +86,8 @@
     // Cache de prompt do ultimo turno: { ts, ttl, read }. null = sem dado medido -> sem chip.
     lastCache?: { ts: number; ttl: number; read: number } | null;
     onOpenGit: () => void;
+    // Anel de contexto tocável: abre a folha de uso, onde contexto, cache e estatística têm rótulo.
+    onOpenUsage?: () => void;
     onOpenPreview: () => void;
     // Grupo de trabalho: chip 🤝 na fileira de cima (1 par = nome; N = "grupo (N)"); tap abre o PairSheet.
     pairPeers?: string[] | null;
@@ -120,7 +124,7 @@
   }
   let {
     sessionName, sessionState, status, lastCache = null, onSend, onSteer, onCommand, onInterrupt, onOpenGit,
-    onOpenPreview, pairPeers = null, pairedState = null, onOpenPair, onOpenOrq = undefined,
+    onOpenUsage, onOpenPreview, pairPeers = null, pairedState = null, onOpenPair, onOpenOrq = undefined,
     sendToPair = false, onToggleSendToPair,
     shellsRodando = 0, onOpenActivity,
     inputText = $bindable(''),
@@ -140,17 +144,6 @@
   // OU, não `??`: a janela estreita (celular) manda sozinha, e a coluna estreita no desktop soma.
   const compacto = $derived(estreito || !desktop.atual);
 
-  // ── Faixa de estatísticas ──────────────────────────────────────────────────
-  // "52s" / "18m01s" / "1h02m". Sub-10s ganha 1 decimal (TTFT vive nessa faixa).
-  function fmtDur(ms: number): string {
-    const s = ms / 1000;
-    if (s < 10) return `${s.toFixed(1)}s`;   // ponto decimal: precedente do ActivitySheet:195
-    if (s < 60) return `${Math.round(s)}s`;
-    const min = Math.floor(s / 60);
-    if (min < 60) return `${min}m${String(Math.round(s % 60)).padStart(2, '0')}s`;
-    return `${Math.floor(min / 60)}h${String(min % 60).padStart(2, '0')}m`;
-  }
-
   // ── Prazo do cache de prompt ───────────────────────────────────────────────
   // O cache do Claude expira num prazo fixo a partir do ultimo turno (usar renova). Saber se ele
   // ainda vale muda a decisao de mandar agora ou nao, entao o prazo mora no composer, onde a
@@ -161,25 +154,10 @@
     const id = setInterval(() => (agora = Date.now()), 20_000);
     return () => clearInterval(id);
   });
-  // `ts` e do servidor e `agora` e do aparelho: com o relogio do celular adiantado/atrasado a conta
-  // desanda. Nao da pra corrigir sem uma referencia de hora do servidor, mas da pra impedir o
-  // absurdo — o que resta nunca pode ser MAIOR que a propria janela.
-  const cacheLeftS = $derived(
-    lastCache
-      ? Math.min(lastCache.ttl, Math.round(lastCache.ts + lastCache.ttl - agora / 1000))
-      : 0,
-  );
-  const cacheAtivo = $derived(!!lastCache && cacheLeftS > 0);
-  // Ultimo quinto do prazo. Fixo em 300s, a janela CURTA (5min) nascia ja em ambar e nunca
-  // mostrava o estado tranquilo.
-  const cacheAcabando = $derived(
-    cacheAtivo && !!lastCache && cacheLeftS <= Math.max(60, lastCache.ttl * 0.2),
-  );
-  const cacheLabel = $derived.by(() => {
-    if (!cacheAtivo) return m.composer_expirou();
-    const min = Math.ceil(cacheLeftS / 60);
-    return min >= 60 ? `${Math.floor(min / 60)}h${String(min % 60).padStart(2, '0')}` : `${min}min`;
-  });
+  const prazoCache = $derived(cachePrazo(lastCache, agora));
+  const cacheAtivo = $derived(prazoCache.ativo);
+  const cacheAcabando = $derived(prazoCache.acabando);
+  const cacheLabel = $derived(prazoCache.label);
 
   const isCodex = $derived(provider === 'codex');
   // OMP é o fork do Pi (mesma TUI, mesmo popover de modelo/esforço) — trata igual aqui.
@@ -2056,7 +2034,13 @@
           </span>
         {/if}
       {#if status?.ctxPct != null}
-        <ContextRing pct={status.ctxPct} size={22} />
+        {#if onOpenUsage}
+          <button class="ctx-ring-btn" onclick={onOpenUsage} aria-label={m.uso_aria()}>
+            <ContextRing pct={status.ctxPct} size={22} />
+          </button>
+        {:else}
+          <ContextRing pct={status.ctxPct} size={22} />
+        {/if}
       {/if}
     </div>
   </div>
@@ -2488,7 +2472,9 @@
   </div>
   </div>
 
-  {#if stats}
+  <!-- No celular a faixa mora na folha de uso (toque na cota ou no anel de contexto): embaixo do
+       card ela era a terceira camada de cromo, em 11px. -->
+  {#if stats && desktop.atual}
     <!-- Faixa de estatísticas (app/stats.py). Números de tempo/velocidade são aproximados
          por construção -> "~" no rótulo. transparent: quem carrega o material é o .composer. -->
     <!-- tabindex: a faixa rola de lado sem barra visível; sem foco, teclado não alcança o
@@ -3117,6 +3103,18 @@
   .cache-chip.acabando { color: var(--warning); }
   .cache-chip.acabando .cache-glyph { background: var(--warning); }
   .cache-chip.frio .cache-glyph { background: var(--text-muted); opacity: 0.5; }
+  /* Alvo maior que o anel sem mudar a altura da faixa: o padding cresce pra fora e a margem
+     negativa devolve o espaço. */
+  .ctx-ring-btn {
+    display: inline-flex;
+    min-width: 0;
+    min-height: 0;
+    padding: 6px 4px;
+    margin: -6px -4px;
+    border-radius: var(--radius-md);
+    flex-shrink: 0;
+  }
+  .ctx-ring-btn:active { background: var(--bg-hover); }
 
   /* Pareada: chip acende no accent (o 🤝 sem par fica na cor muted padrão do repo-chip). */
   .pair-chip--on { color: var(--accent); }

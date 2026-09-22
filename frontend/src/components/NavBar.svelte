@@ -71,7 +71,9 @@
   const menuDot = $derived(runRunning || activityRunning || activityBadge > 0);
 </script>
 
-<nav class="navbar">
+<!-- titulo-esquerda: o chat do celular. O nome encosta no voltar (centralizado ele ficava espremido
+     entre 1 botao a esquerda e 3 a direita) e a conta desce pra uma linha propria. -->
+<nav class="navbar" class:titulo-esquerda={!!onTitleTap && !crumbs}>
   <div class="navbar-inner">
     {#if showBack}
       <button class="nav-btn back-btn" onclick={onBack} aria-label={m.comum_voltar()}>
@@ -113,6 +115,7 @@
       </div>
     {:else if onTitleTap}
       <button class="title-chip" onclick={onTitleTap} aria-label={m.sessao_trocar_de()}>
+        <span class="chip-linha">
         <span class="chip-text">{title}</span>
         {#if providerLabel && onProviderTap}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -125,11 +128,6 @@
           >{providerLabel}</span>
         {:else if providerLabel}
           <span class="provider-badge">{providerLabel}</span>
-        {/if}
-        {#if conta}
-          <!-- Conta Anthropic da sessão aberta: o desktop tem a pílula de cota da barra de abas;
-               no celular este chip é o único lugar que diz qual conta paga a conversa. -->
-          <span class="navbar-conta" style="color: {conta.cor}; border-color: {conta.cor};" title={m.sessao_conta({ n: conta.nome })}>{conta.label}</span>
         {/if}
         {#if loopLabel}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -146,6 +144,14 @@
         <svg class="chip-chevron" width="11" height="7" viewBox="0 0 11 7" fill="none" aria-hidden="true">
           <path d="M1 1l4.5 4.5L10 1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
+        </span>
+        {#if conta}
+          <!-- Conta da sessão aberta: no celular é o único lugar que diz qual conta paga a conversa.
+               Linha própria pra nunca cortar o nome; a cor da conta fica só na bolinha. -->
+          <span class="navbar-conta" title={m.sessao_conta({ n: conta.nome })}>
+            <span class="conta-dot" style="background: {conta.cor};" aria-hidden="true"></span>{conta.label}
+          </span>
+        {/if}
       </button>
     {:else if subtitle}
       <div class="navbar-titlewrap">
@@ -211,7 +217,7 @@
         </button>
       {/if}
       {#if (status && onExpandUsage) || limited}
-        <RateChips {status} onExpand={onExpandUsage} {limited} {limitReset} />
+        <RateChips {status} onExpand={onExpandUsage} {limited} {limitReset} variant={onTitleTap && !crumbs ? 'chip' : 'dial'} />
       {/if}
       <!-- Mostrador e menu CONVIVEM (antes o menu era um `else` do mostrador, entao nunca aparecia
            numa sessao com statusline). No celular o "⋯" guarda Rodar/Atividade; o ponto acende
@@ -371,15 +377,22 @@
     font-weight: 600;
   }
   .navbar-conta {
-    flex-shrink: 0;
-    /* Teto obrigatorio: sem ele um nome longo de pasta (`.codex-jefferson-felizardo`) empurra o
-       nome da sessao ate sobrar duas letras, porque quem encolhe na barra e o titulo. */
-    max-width: 9ch;
+    display: block;
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
-    padding: 0 6px; border: 1px solid; border-radius: var(--radius-full);
+    font-size: var(--text-xs);
+    line-height: 1.2;
+    color: var(--text-muted);
+  }
+  .conta-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 6px;
+    border-radius: 50%;
+    vertical-align: 1px;
   }
 
   /* Titulo tappavel: chip centralizado com chevron (abre o switcher de sessoes). */
@@ -403,6 +416,37 @@
   .title-chip:active {
     background: var(--bg-hover);
   }
+
+  .chip-linha {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  /* Chat do celular: nome a esquerda com a conta embaixo, e os botoes em cinza — o destaque fica
+     pro que pede atencao (ponto do ⋯, terminal com overlay aberto). */
+  .titulo-esquerda .navbar-inner {
+    padding-left: var(--space-2);
+    padding-right: calc(var(--space-2) + var(--cp-wco-right));
+  }
+  .titulo-esquerda .title-chip {
+    height: 44px;
+    min-height: 44px;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 2px;
+    text-align: left;
+  }
+  .titulo-esquerda .chip-text {
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.15;
+  }
+  .titulo-esquerda .nav-btn { color: var(--text-secondary); }
+  .titulo-esquerda .terminal-btn.alert { color: var(--accent); }
 
   .chip-text {
     font-size: var(--text-lg);

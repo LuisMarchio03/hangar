@@ -3115,6 +3115,7 @@
         onCommand={handleCommand}
         onInterrupt={handleInterrupt}
         onOpenGit={() => (gitOpen = true)}
+        onOpenUsage={() => (usageOpen = true)}
         onOpenPreview={() => (previewOpen = true)}
         provider={sessionProvider}
         engine={sessionEngine}
@@ -3184,7 +3185,7 @@
                    onNavigateToChat={onNavigateToChat} />
   {/if}
 
-  <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} />
+  <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} stats={statsEvent} {lastCache} title={sessionName} conta={desktop ? null : contaChip} />
   <BtwSheet open={btwOpen} {sessionName} pergunta={btwPergunta} onClose={() => (btwOpen = false)} />
 
   <Git open={gitOpen} {sessionName} {desktop} {filesInContext} initialTab={gitInitialTab} onClose={() => { gitOpen = false; gitInitialTab = 'changes'; }}

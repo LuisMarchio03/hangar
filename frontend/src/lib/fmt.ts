@@ -45,3 +45,13 @@ export function money(n: number, cur: Cur, rate: number | null): string {
   if (Math.abs(v) < 1000) return semNbsp(nf(c).format(v));
   return semNbsp(nf(c, { notation: 'compact', maximumFractionDigits: 1 }).format(v));
 }
+
+/** "52s" / "18m01s" / "1h02m". Sub-10s ganha 1 decimal (TTFT vive nessa faixa). */
+export function fmtDur(ms: number): string {
+  const s = ms / 1000;
+  if (s < 10) return `${s.toFixed(1)}s`;
+  if (s < 60) return `${Math.round(s)}s`;
+  const min = Math.floor(s / 60);
+  if (min < 60) return `${min}m${String(Math.round(s % 60)).padStart(2, '0')}s`;
+  return `${Math.floor(min / 60)}h${String(min % 60).padStart(2, '0')}m`;
+}
