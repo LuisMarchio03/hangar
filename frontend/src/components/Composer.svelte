@@ -143,6 +143,7 @@ import { cachePrazo } from '../lib/cachePrazo';
 
   // OU, não `??`: a janela estreita (celular) manda sozinha, e a coluna estreita no desktop soma.
   const compacto = $derived(estreito || !desktop.atual);
+  const statsNaFolha = $derived(!desktop.atual && !!onOpenUsage && status?.ctxPct != null);
 
   // ── Prazo do cache de prompt ───────────────────────────────────────────────
   // O cache do Claude expira num prazo fixo a partir do ultimo turno (usar renova). Saber se ele
@@ -2472,9 +2473,10 @@ import { cachePrazo } from '../lib/cachePrazo';
   </div>
   </div>
 
-  <!-- No celular a faixa mora na folha de uso (toque na cota ou no anel de contexto): embaixo do
-       card ela era a terceira camada de cromo, em 11px. -->
-  {#if stats && desktop.atual}
+  <!-- No celular a faixa mora na folha de uso, que o anel de contexto abre: embaixo do card ela era
+       a terceira camada de cromo, em 11px. Sem anel (sessão sem ctxPct) não há porta pra folha, e a
+       faixa fica. -->
+  {#if stats && !statsNaFolha}
     <!-- Faixa de estatísticas (app/stats.py). Números de tempo/velocidade são aproximados
          por construção -> "~" no rótulo. transparent: quem carrega o material é o .composer. -->
     <!-- tabindex: a faixa rola de lado sem barra visível; sem foco, teclado não alcança o
