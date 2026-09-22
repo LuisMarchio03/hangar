@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { ler, gravar, urlSemConfig, urlInicial } = require('./settings.cjs');
-const { uaDeChrome, normalizaBounds, urlNavegavel, nomeSidecar, proximaAtiva } = require('./navegador.cjs');
+const { uaDeChrome, normalizaBounds, urlNavegavel, nomeSidecar, proximaAtiva, hostLoopback } = require('./navegador.cjs');
 const { criarControlador } = require('./preview_ctl.cjs');
 const { commitDoCheckout } = require('./versao.cjs');
 const { importarCookiesDoChrome, PAGINA_ATIVAR } = require('./cookies_chrome.cjs');
@@ -1102,6 +1102,10 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', () => abrirJanela('segunda janela'));
   app.whenReady().then(() => {
+    // Servidor de dev com certificado auto-assinado (ex.: ApiGateway em https://localhost) só abre
+    // no navegador embutido e só em loopback. -3 devolve a decisão ao Chromium pra todo o resto.
+    // Vale pra toda conexão da sessão, websocket incluído, e nunca pra janela do app.
+    session.fromPartition('persist:nav').setCertificateVerifyProc((req, cb) => cb(hostLoopback(req.hostname) ? 0 : -3));
     limparSidecaresNav();
     subirServidor({
       controladorDe: (chave, aba) => entradaDe(chave, aba)?.ctl || null,
