@@ -26,7 +26,8 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
   import StateChip from './StateChip.svelte';
   import type { Provider, State, SessionInfo, PlanDetail, ChatEvent, Activity, ShellVivo } from '@hangar/core';
   import type { StatusFields } from '@hangar/core';
-  import { ctxWindow, providerName } from '@hangar/core';
+  import { comTeto, ctxWindow, getSessionCostForServer, providerName, type SessionCostEstimate } from '@hangar/core';
+  import { listServers } from '../lib/auth';
   import { money2 } from '../lib/fmt';
   import { moeda } from '../lib/moeda.svelte';
   import { criarArquivosMudados } from '../lib/arquivosMudados.svelte';
@@ -121,7 +122,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
   }
 
   let {
-    state, stateDetail = null, status = null, pairPeers = null,
+    state: sessionState, stateDetail = null, status = null, pairPeers = null,
     events = null, histGap = '', cwd = null,
     serverLabel = '', provider = 'claude', sessionName = '', serverId = '',
     onOpenTerminal = undefined, terminalAlert = false,
@@ -227,15 +228,58 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
     return n < 1000 ? String(Math.round(n)) : ctxWindow(n);
   }
 
-  // Custo acumulado da sessao: so a statusline mede, e ate agora ele so aparecia la embaixo no
-  // terminal. Moeda e cotacao sao as do app inteiro (lib/moeda) — sem cotacao o fmt cai pro dolar.
+  let costSnapshot = $state<{ key: string; value: SessionCostEstimate | null; error: string | null } | null>(null);
+  let wideEnough = $state(typeof window !== 'undefined' && window.innerWidth >= 1280);
+  const costKey = $derived(`${serverId}::${sessionName}::${session?.jsonl ?? ''}`);
+  const codexCost = $derived(costSnapshot?.key === costKey ? costSnapshot : null);
+  $effect(() => {
+    const key = costKey;
+    if (provider !== 'codex' || !serverId || !sessionName || !session?.jsonl || !wideEnough || ctxPanel.recolhido
+        || ctxPanel.aba !== 'contexto' || gitAberto) return;
+    const server = listServers().find((item) => item.id === serverId);
+    if (!server) return;
+    let controller: AbortController | null = null;
+    let lastValue: SessionCostEstimate | null = null;
+    const load = async () => {
+      controller?.abort();
+      const current = new AbortController();
+      controller = current;
+      try {
+        const value = await getSessionCostForServer(server, sessionName, comTeto(current.signal, 25_000));
+        if (!current.signal.aborted) {
+          lastValue = value;
+          costSnapshot = { key, value, error: null };
+        }
+      } catch (error) {
+        if (!current.signal.aborted) {
+          costSnapshot = { key, value: lastValue, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => { void load(); }, 30_000);
+    return () => { window.clearInterval(timer); controller?.abort(); };
+  });
+
+  // Claude publica o custo na statusline; Codex usa o histórico da sessão e a tarifa de API.
+  const costAmount = $derived(provider === 'codex' ? codexCost?.value?.cost_usd : status?.costUsd);
   const custoLabel = $derived(
-    typeof status?.costUsd === 'number' && isFinite(status.costUsd)
-      ? money2(status.costUsd, moeda.cur, moeda.rate)
+    typeof costAmount === 'number' && isFinite(costAmount)
+      ? money2(costAmount, moeda.cur, moeda.rate)
       : null,
   );
+  const custoTitle = $derived.by(() => {
+    if (provider !== 'codex') return undefined;
+    if (codexCost?.error) return codexCost.error;
+    const missing = codexCost?.value?.missing_models ?? [];
+    return missing.length ? `${m.custos_sem_tarifa_volume()}: ${missing.join(', ')}` : m.custos_aviso_estimativa();
+  });
+  const costCaption = $derived.by(() => {
+    if (provider !== 'codex') return m.ctx_nesta_sessao();
+    return codexCost?.value?.missing_models.length ? m.custos_sem_tarifa() : m.custos_estimativa_api();
+  });
   $effect(() => {
-    if (status?.costUsd != null) moeda.garantirCotacao();
+    if (costAmount != null) moeda.garantirCotacao();
   });
   // Duracao CRUA ("12min", "3h", "2d"), nao o relativeTime do core: ele ja embute o "atras", e a
   // frase daqui e "trabalhando ha {t}" — as duas juntas davam "trabalhando ha 12 min atras".
@@ -253,7 +297,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
   // detalhe do estado, no header deste painel ("Boogieing… (46m 15s)"). Um segundo relógio contado
   // daqui discordava dele na mesma tela (contava do último prompt, não do começo do turno).
   const tempoNoEstado = $derived.by(() => {
-    if (state === 'working') return null;
+    if (sessionState === 'working') return null;
     const ts = session?.last_activity;
     return ts ? m.ctx_parada_ha({ t: duracaoCurta(ts) }) : null;
   });
@@ -291,7 +335,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
   // store (arrastarLargura), salva no soltar. Sem transicao de width no painel, o arrasto
   // segue o ponteiro sem lag — a classe resizing fica como trava contra alguém adicionar
   // transicao depois (mesmo motivo do .sidebar.resizing). O flag `resizing` vive no store
-  // (ctxPanel) porque o componente tem uma prop `state` e o rune `$state` colide com ela.
+  // (ctxPanel) porque a largura e compartilhada com o DesktopShell.
   function resizeStart(e: PointerEvent) {
     ctxPanel.resizing = true;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -327,6 +371,8 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
     return () => { ctxPanel.resizing = false; };
   });
 </script>
+
+<svelte:window onresize={() => (wideEnough = window.innerWidth >= 1280)} />
 
 <aside class="session-context" class:recolhido={ctxPanel.recolhido} class:toggle-externo={toggleExterno} class:resizing={ctxPanel.resizing} aria-label={m.ctx_painel_titulo()}>
   {#if !ctxPanel.recolhido}
@@ -372,7 +418,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
     </div>
     <div class="header-right">
       <MoverBloco bloco="ctx" />
-      <StateChip {state} size="md" />
+      <StateChip state={sessionState} size="md" />
       {#if loopLabel}
         <button type="button" class="loop-chip" style="color: {loopColor};" onclick={onLoopTap} aria-label={m.ctx_aria_loop({ n: loopLabel })}>{loopLabel}</button>
       {/if}
@@ -532,10 +578,10 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
           {m.ctx_do_contexto()}{#if status?.ctxUsed != null && status.ctxTotal}<span class="mono">&nbsp;· {m.ctx_usado_de_total({ usado: ctxWindow(status.ctxUsed), total: ctxWindow(status.ctxTotal) })}</span>{:else if status?.ctxTotal}<span class="mono">&nbsp;· {ctxWindow(status.ctxTotal)}</span>{/if}
         </span>
       </span>
-      {#if custoLabel}
-        <span class="agora-custo">
-          <strong>{custoLabel}</strong>
-          <span>{m.ctx_nesta_sessao()}</span>
+      {#if custoLabel || provider === 'codex'}
+        <span class="agora-custo" title={custoTitle}>
+          <strong>{custoLabel ?? '—'}</strong>
+          <span>{costCaption}</span>
         </span>
       {/if}
     </div>

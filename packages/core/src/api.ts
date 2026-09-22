@@ -394,6 +394,16 @@ export async function fetchCostsForServer(s: Server, period: string, fresco = fa
   return res.json() as Promise<Partial<CostReport>>;
 }
 
+export interface SessionCostEstimate {
+  cost_usd: number | null;
+  missing_models: string[];
+  has_usage: boolean;
+}
+
+export function getSessionCostForServer(s: Server, name: string, signal: AbortSignal): Promise<SessionCostEstimate> {
+  return apiFetchForServer(s, `/api/sessions/${encodeURIComponent(name)}/cost`, { signal }, 25_000);
+}
+
 // Só a cotação USD/BRL do servidor ativo (cache de 1h no backend). Existe à parte do /api/costs
 // porque quem mostra o custo de UMA sessão — painel, card do quadro, folha de uso — não pode
 // esperar a varredura de transcript do relatório só pra saber a taxa. null = sem cotação; quem

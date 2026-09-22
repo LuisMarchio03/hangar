@@ -2619,6 +2619,18 @@ async def history(request: Request, response: Response, name: str, limit: int | 
     return evs
 
 
+@app.get("/api/sessions/{name}/cost", dependencies=[Depends(require_auth)])
+async def codex_session_cost(name: str):
+    info = await _cached_info(name)
+    if not info or info.provider != "codex" or not info.jsonl:
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "Codex session not found"))
+    from app.session_cost import estimate_session_cost
+    try:
+        return await asyncio.to_thread(estimate_session_cost, info.jsonl)
+    except OSError:
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "Codex rollout not found")) from None
+
+
 @app.get("/api/sessions/{name}/plan-preview", dependencies=[Depends(require_auth)])
 async def plan_preview(name: str, content: bool = True):
     info = await _cached_info(name)
