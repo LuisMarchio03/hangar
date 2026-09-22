@@ -347,14 +347,14 @@
   //   o blob nao existe mais e a url e a do upload no servidor (ver restaurarDitado).
   // - `arquivo`: nome do audio em .hangar-uploads. E o que deixa a barra sobreviver a sair da
   //   conversa e voltar: o objectURL morre com a aba, o arquivo do servidor nao.
-  // - `before`: o que havia no campo antes deste ditado, pra toda troca remontar a MESMA
-  //   concatenacao trocando so a parte ditada.
+  // - `before`/`after`: texto dos dois lados da insercao, pra trocar so a parte ditada.
   // - `cache`: estilo -> texto ja obtido. Reclicar num estilo por onde ja passou e instantaneo e de
   //   graca; sem isso, comparar duas versoes custaria uma chamada de LLM por ida e volta.
   type DitadoAtivo = {
     url: string;
     arquivo?: string;
     before: string;
+    after: string;
     raw: string;
     atual: VersaoDitado;
     cache: Partial<Record<VersaoDitado, string>>;
@@ -376,7 +376,8 @@
       return {
         url: uploadUrl(sessionName, d.arquivo),
         arquivo: d.arquivo,
-        before: typeof d.before === 'string' ? d.before : '',
+        before: typeof d.before === 'string' ? d.before + (d.after === undefined && d.before ? ' ' : '') : '',
+        after: typeof d.after === 'string' ? d.after : '',
         raw: d.raw,
         atual: ehVersao(d.atual) ? d.atual : 'cru',
         cache: d.cache ?? {},
@@ -391,8 +392,8 @@
   let ditado = $state<DitadoAtivo | null>(restaurarDitado());
   $effect(() => {
     if (ditado?.arquivo) {
-      const { arquivo, before, raw, atual, cache } = ditado;
-      localStorage.setItem(ditadoKey, JSON.stringify({ arquivo, before, raw, atual, cache }));
+      const { arquivo, before, after, raw, atual, cache } = ditado;
+      localStorage.setItem(ditadoKey, JSON.stringify({ arquivo, before, after, raw, atual, cache }));
     } else {
       localStorage.removeItem(ditadoKey);
     }
@@ -410,7 +411,8 @@
   let destroyed = false;         // onDestroy: um getUserMedia em voo nao pode ligar o mic num componente morto
   // Feedback da gravacao: timer (segundos) + waveform (nivel de voz por barra, deslizante).
   let recSeconds = $state(0);
-  let recBars = $state<number[]>([]);
+  let recBars = $state<{ id: number; level: number }[]>([]);
+  let recBarId = 0;
   let audioCtx: AudioContext | undefined;
   let rafId = 0;
   let recTimer: ReturnType<typeof setInterval> | undefined;
@@ -1119,6 +1121,7 @@
     // palavra e nao ter mais como ouvir o audio nem trocar a versao era exatamente a queixa: o
     // audio existe, o texto cru existe, e mesmo assim so restava ditar tudo de novo.
     autoGrow();
+    rememberSelection();
   }
 
   // Tap em qualquer area do composer que nao seja um controle -> foca o input.
@@ -1218,6 +1221,31 @@
   // dois minutos de fala por causa de um timeout ou de um 502 do provedor e perder trabalho dela.
   // So o File — o Blob vive na memoria da aba e nao paga nada; sai da tela no proximo sucesso.
   let audioFalhou = $state<{ file: File; ditado: boolean; avisoTeto: boolean } | null>(null);
+  // O botão do mic tira o foco; a seleção do textarea pode voltar a zero durante o ditado.
+  let lastSelection: { value: string; start: number; end: number } | null = null;
+
+  function rememberSelection() {
+    const field = textareaEl;
+    if (field) lastSelection = { value: field.value, start: field.selectionStart, end: field.selectionEnd };
+  }
+
+  function inserirTranscricao(texto: string): { before: string; after: string; hadDraft: boolean; cursor: number } {
+    const field = textareaEl;
+    const value = field?.value ?? inputText;
+    const saved = lastSelection?.value === value ? lastSelection : null;
+    const focused = field === document.activeElement;
+    const start = Math.min(saved?.start ?? (focused ? field?.selectionStart : undefined) ?? value.length, value.length);
+    const end = Math.min(saved?.end ?? (focused ? field?.selectionEnd : undefined) ?? start, value.length);
+    const before = value.slice(0, start);
+    const after = value.slice(end);
+    const leading = before && !/\s$/.test(before) ? ' ' : '';
+    const trailing = after && !/^\s/.test(after) ? ' ' : '';
+    const insert = `${leading}${texto}${trailing}`;
+    field?.setRangeText(insert, start, end, 'end');
+    inputText = `${before}${insert}${after}`;
+    return { before: before + leading, after: trailing + after,
+      hadDraft: value.trim().length > 0, cursor: start + insert.length };
+  }
 
   async function transcribeIntoComposer(file: File, opts?: { ditado?: boolean; avisoTeto?: boolean; autoEnvio?: boolean }) {
     // Uma por vez: transcribing e setado SINCRONO antes de qualquer await, entao um segundo audio
@@ -1242,11 +1270,8 @@
         if (opts?.ditado) { somRecusa(); setTimeout(fecharBipes, 400); }
         return;
       }
-      // Le inputText SO agora (pos-await, na hora de atribuir): o campo continua digitavel durante
-      // "transcrevendo…" (canSend so trava o botao de enviar), entao ler antes do await perderia o
-      // que o usuario digitou a mao enquanto esperava o round-trip (mais lento agora, com a limpeza).
-      const before = inputText.trim();
-      inputText = before ? `${before} ${t}` : t;
+      // A selecao e lida depois da rede: o campo continua editavel durante a transcricao.
+      const { before, after, hadDraft, cursor } = inserirTranscricao(t);
       // Barra do ditado: so no mic. Audio ANEXADO pelo 📎 nao passa por limpeza nenhuma (o backend
       // nem recebe `limpar`), entao nao ha versao pra trocar — e o arquivo e da pessoa, ela ja tem
       // como ouvir. `cru` cai pro proprio `t` quando o backend nao mandou raw (limpeza desistiu e
@@ -1256,7 +1281,7 @@
         // `cru` cai pro proprio `t` quando o backend nao mandou raw: aconteceu quando a limpeza
         // desistiu (aviso) ou o texto era curto demais pra limpar, e nos dois casos o que esta no
         // campo JA e o cru — que e o que o botao "Cru" tem que devolver.
-        abrirDitado({ file, path, before, cru: raw?.trim() || t, texto: t, aplicado: estilo_aplicado });
+        abrirDitado({ file, path, before, after, cru: raw?.trim() || t, texto: t, aplicado: estilo_aplicado });
       } else {
         fecharDitado();
       }
@@ -1267,7 +1292,7 @@
         recError = m.composer_silencio();
       }
       if (opts?.ditado && opts.autoEnvio !== false) {
-        if (podeEnviarSozinho({ motivo: motivoDoFim, texto: t, aviso, rascunhoAntes: before.length > 0 })) {
+        if (podeEnviarSozinho({ motivo: motivoDoFim, texto: t, aviso, rascunhoAntes: hadDraft })) {
           iniciarContagem();
         } else {
           // Envio automatico suprimido (motivo != silencio, aviso da limpeza ou rascunho ja no
@@ -1281,6 +1306,8 @@
       await tick();
       autoGrow();
       textareaEl?.focus();
+      textareaEl?.setSelectionRange(cursor, cursor);
+      rememberSelection();
     } catch (err) {
       console.error(m.composer_transcricao_falhou(), err);
       cancelarContagem();   // erro de transcricao nunca inicia contagem
@@ -1318,13 +1345,14 @@
   }
 
   // Abre a barra pro ditado que acabou de cair no campo. Um por vez: o anterior ja saiu do campo.
-  function abrirDitado(d: { file: File; path?: string; before: string; cru: string; texto: string; aplicado?: string }) {
+  function abrirDitado(d: { file: File; path?: string; before: string; after: string; cru: string; texto: string; aplicado?: string }) {
     fecharDitado();
     const atual: VersaoDitado = ehVersao(d.aplicado) ? d.aplicado : 'cru';
     ditado = {
       url: URL.createObjectURL(d.file),
       arquivo: d.path?.split('/').pop(),
       before: d.before,
+      after: d.after,
       raw: d.cru,
       atual,
       // O texto que ja esta no campo entra no cache pela versao que o BACKEND disse ter aplicado —
@@ -1351,8 +1379,13 @@
     if (ditado !== alvo) return;
     alvo.cache[v] = texto;
     alvo.atual = v;
-    inputText = alvo.before ? `${alvo.before} ${texto}` : texto;
-    void tick().then(autoGrow);
+    inputText = `${alvo.before}${texto}${alvo.after}`;
+    void tick().then(() => {
+      autoGrow();
+      const cursor = alvo.before.length + texto.length;
+      textareaEl?.setSelectionRange(cursor, cursor);
+      rememberSelection();
+    });
   }
 
   // Troca a versao do texto ditado. Nao reenvia o audio: a Whisper ja rodou e o cru esta aqui, entao
@@ -1552,7 +1585,7 @@
         if (now - last > 55) {   // ~18fps (nao re-renderiza o array a cada frame de tela)
           last = now;
           // cresce da esquerda ate encher a largura (barCount), depois desliza mantendo os ultimos.
-          recBars = [...recBars, level].slice(-barCount);
+          recBars = [...recBars, { id: ++recBarId, level }].slice(-barCount);
           if (maosLivres && vadEstado && nQuad) {
             const rmsJanela = Math.sqrt(somaQuad / nQuad);   // SEM ganho e SEM clamp
             if (passoVad(vadEstado, rmsJanela, now) === 'encerra') pararPorMotivo('silencio');
@@ -2105,6 +2138,9 @@
         : m.composer_mensagem_para({ nome: nomePlaceholder })}
       rows={1}
       oninput={handleInput}
+      onpointerup={rememberSelection}
+      onclick={rememberSelection}
+      onkeyup={rememberSelection}
       onkeydown={handleKeydown}
       onpaste={onPaste}
       aria-label={m.composer_aria_mensagem()}
@@ -2130,7 +2166,7 @@
              precisa dizer "Gravando áudio" uma vez, via aria-label). -->
         <span class="rec-time" aria-hidden="true">{recTimeLabel}</span>
         <span class="rec-wave" bind:clientWidth={waveW} aria-hidden="true">
-          {#each recBars as b, i (i)}<span class="rec-bar" style="--h: {b}"></span>{/each}
+          {#each recBars as b (b.id)}<span class="rec-bar" style="--h: {b.level}"></span>{/each}
         </span>
       </div>
     {/if}
