@@ -235,6 +235,12 @@ function Loga-Tailscale {
         Nota 'Depois: `tailscale up` e este instalador de novo - o passo 5d grava CP_PUBLIC_URL sozinho.'
         return
     }
+    # A dica vem AQUI, com o navegador ja aberto na conta certa: o passo 5d so descobre que o
+    # HTTPS esta desligado quando o `tailscale serve` falha, e ai a pessoa volta ao site de novo.
+    Write-Host '  Aproveite o navegador aberto: em https://login.tailscale.com/admin/dns'
+    Write-Host '    1. em "DNS", ligue o MagicDNS (se ainda estiver desligado);'
+    Write-Host '    2. em "HTTPS Certificates", clique "Enable HTTPS" e confirme.'
+    Nota 'Sem isso o passo 5d nao consegue publicar o backend pro celular (tailscale serve).'
     $eapAnt = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'   # nativo: o link de login sai no stderr
     try {
@@ -631,7 +637,7 @@ Instale 'Python'                'py'     'Python.Python.3.14'   'o backend e Pyt
 # 3.14, nao 3.13: backend/pyproject.toml exige >=3.14 (e .python-version = 3.14). Com o 3.13 o
 # `uv sync` ate funcionava - baixava um 3.14 gerenciado por conta propria - mas o Python do winget
 # virava peso morto, servindo so ao shim python3 do hangar-send. Um Python so pros dois papeis.
-Instale 'Node 20+'              'node'   'OpenJS.NodeJS.LTS'    'o frontend e Svelte'       | Out-Null
+Instale 'Node LTS (minimo 20)'  'node'   'OpenJS.NodeJS.LTS'    'o frontend e Svelte'       | Out-Null
 Instale 'uv'                    'uv'     'astral-sh.uv'         'gerencia o venv do backend' | Out-Null
 
 # O backend chama o multiplexador por `tmux`. O psmux publica esse alias; se um dia parar,
