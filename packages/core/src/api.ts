@@ -444,7 +444,7 @@ export async function fetchUsoForServer(s: Server, period: string, filtros: UsoF
 export class Aquecendo extends Error {
   constructor(public readonly lidos: number, public readonly total: number) {
     super(`aquecendo ${lidos}/${total}`);
-    this.name = 'Aquecendo';
+    this.name = new.target.name;
   }
 
   static async de(res: Response): Promise<Aquecendo> {
