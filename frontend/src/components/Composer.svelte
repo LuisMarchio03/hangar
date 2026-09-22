@@ -1229,13 +1229,17 @@
     if (field) lastSelection = { value: field.value, start: field.selectionStart, end: field.selectionEnd };
   }
 
+  function rememberFocusedSelection() {
+    if (textareaEl === document.activeElement) rememberSelection();
+  }
+
   function inserirTranscricao(texto: string): { before: string; after: string; hadDraft: boolean; cursor: number } {
     const field = textareaEl;
     const value = field?.value ?? inputText;
     const saved = lastSelection?.value === value ? lastSelection : null;
     const focused = field === document.activeElement;
-    const start = Math.min(saved?.start ?? (focused ? field?.selectionStart : undefined) ?? value.length, value.length);
-    const end = Math.min(saved?.end ?? (focused ? field?.selectionEnd : undefined) ?? start, value.length);
+    const start = Math.min((focused ? field?.selectionStart : saved?.start) ?? value.length, value.length);
+    const end = Math.min((focused ? field?.selectionEnd : saved?.end) ?? start, value.length);
     const before = value.slice(0, start);
     const after = value.slice(end);
     const leading = before && !/\s$/.test(before) ? ' ' : '';
@@ -2141,6 +2145,7 @@
       onpointerup={rememberSelection}
       onclick={rememberSelection}
       onkeyup={rememberSelection}
+      onselect={rememberFocusedSelection}
       onkeydown={handleKeydown}
       onpaste={onPaste}
       aria-label={m.composer_aria_mensagem()}
