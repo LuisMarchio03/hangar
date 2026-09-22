@@ -5,6 +5,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **Lista e chat do Codex usam o mesmo estado nativo quando a conexão está saudável e assinada.**
+  O hook é alternativa para estado indisponível; um `working` antigo não vence a interrupção
+  confirmada pelo app-server. O retrato só vale para a mesma thread do rollout.
+
 - **Codex: `/compact` chama `thread/compact/start`, fora da fila de prompts.** A troca entre
   terminal e sem terminal preserva a thread e suas escolhas; só confirma quando o destino
   carregou a conversa. Assinar eventos com `thread/resume` não sobrescreve sandbox nem aprovação.
@@ -156,6 +160,11 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   Leitura e processamento vão em `try` separados.
 
 ## Codex: compactação e ida ao terminal
+
+Na interrupção de 22/09/2026, o rollout registrou `turn_aborted`, mas o hook ficou em `working`:
+o chat mostrou pronto e o card continuou em execução. A lista passou a consultar o mesmo retrato
+do adapter usado pelo chat. Na prova com uma sessão descartável com terminal, `/interrupt`
+encerrou o turno e `/api/sessions` retornou `idle` mesmo com o marcador ainda em `working`.
 
 Em 22/09/2026, com codex-cli 0.155.1 no Linux, `/compact` enviado pelo composer produziu um
 registro `compacted` no rollout e exibiu “Compactando…” até concluir. Na troca pelo botão,

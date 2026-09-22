@@ -173,6 +173,50 @@ async def test_a_lista_le_o_marcador_do_codex_sem_raspar_o_pane(tmp_path, monkey
     assert out["cx"].problema is None
 
 
+@pytest.mark.parametrize("ending", [
+    {"method": "turn/completed", "params": {"turn": {"id": "turn-1", "status": "interrupted"}}},
+    {"method": "thread/status/changed", "params": {"status": {"type": "idle"}}},
+])
+async def test_list_follows_native_interrupt_despite_working_hook(tmp_path, monkeypatch, ending):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from app import adapters
+    from app.adapters.codex.adapter import CodexAdapter
+
+    rollout = _rollout(tmp_path, _ev("task_started"))
+    reg = registry.SessionRegistry(projects_dir=tmp_path)
+    monkeypatch.setattr(reg, "list", lambda: [SessionInfo(
+        name="cx", cwd="/p", jsonl=rollout, tracked=True, provider="codex")])
+    marker = ["working", 1.0]
+    monkeypatch.setattr(registry.hook_state, "get_state", lambda _: tuple(marker))
+    monkeypatch.setattr(registry.tmux, "capture_pane", lambda *a, **k: pytest.fail("raspou o pane"))
+    adapter = CodexAdapter()
+    client = SimpleNamespace(closed=False, server_requests={})
+    monkeypatch.setattr(adapter, "_start_bomba", lambda *args: None)
+    adapter.attach("cx", client, _ID, subscribed=True)
+    adapter._restore_turn(adapter._sessions["cx"], {"status": {"type": "active"},
+                                                  "turns": [{"id": "turn-1", "status": "inProgress"}]})
+    adapter.drain = AsyncMock(return_value=0)
+    original = adapters.get_adapter
+    monkeypatch.setattr(adapters, "get_adapter", lambda key: adapter if key == "codex" else original(key))
+
+    assert (await reg.list_with_state())[0].state == "working"
+    async def notifications():
+        yield {**ending, "params": {"threadId": _ID, **ending["params"]}}
+    client.notifications = notifications
+    await adapter._consumir("cx", client, adapter._sessions["cx"], lambda _: None)
+    assert (await reg.list_with_state())[0].state == "idle"
+    assert marker[0] == "working"
+
+    # Um novo turno também vence o hook antigo no sentido oposto.
+    marker[0] = "idle"
+    adapter._restore_turn(adapter._sessions["cx"], {"status": {"type": "active"}})
+    assert (await reg.list_with_state())[0].state == "working"
+    # Conexão perdida: o retrato antigo deixa de ser autoridade.
+    client.closed = True
+    assert (await reg.list_with_state())[0].state == "idle"
+
+
 async def test_codex_trabalhando_sem_marcador_vira_problema_explicito(tmp_path, monkeypatch):
     # O único modo de falha do estado por hook: hook não aprovado na TUI não roda e não avisa.
     # Calado, isso é uma sessão eternamente ociosa enquanto trabalha.

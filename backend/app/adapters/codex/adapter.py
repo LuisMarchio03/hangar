@@ -1263,6 +1263,17 @@ class CodexAdapter:
             if not (lock and lock.locked()) and (not current or current["client"] is client):
                 return
 
+    def snapshot(self, name: str, thread_id: str) -> StateEvent | None:
+        """Estado conhecido da thread viva, compartilhado entre a lista e o chat."""
+        sess = self._sessions.get(name)
+        if not sess or sess["thread_id"] != thread_id or not sess.get("subscribed"):
+            return None
+        if sess["client"].closed or sess.get("bomba_error"):
+            return None
+        if not sess.get("turn_state_known") and not sess.get("in_progress"):
+            return None
+        return self._question_state(name, sess)
+
     def _question_state(self, name: str, sess: dict) -> StateEvent:
         from .questions import pending
         blocking = pending(sess["client"], sess["thread_id"])

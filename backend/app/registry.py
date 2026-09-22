@@ -1373,10 +1373,8 @@ class SessionRegistry:
         pending = []  # infos sem marcador (ou awaiting) -> precisa raspar o pane
         pendente_sem_thread = []  # Codex antes da thread -> raspa o pane SO pra achar menu
         for info in infos:
-            # Codex: le o marcador como os outros, mas NUNCA raspa o pane. A TUI dele nao tem regua
-            # nem caixa de composer, entao `classify` devolveria as duas ultimas linhas verbatim —
-            # viraria uma segunda statusline, pior que a que o adapter ja monta. Sem marcador nao
-            # ha fallback nenhum: fica o default idle (ou o aviso de hooks, logo abaixo).
+            # Codex compartilha o estado nativo com o chat; o hook cobre conexões indisponíveis.
+            # Nunca classifica o pane: a TUI não tem a régua/composer usados pelo Claude.
             if getattr(info, "provider", "claude") == "codex":
                 info.last_activity = _jsonl_mtime(info.jsonl)
                 if not info.jsonl:
@@ -1396,28 +1394,31 @@ class SessionRegistry:
                     if not info.headless:
                         pendente_sem_thread.append(info)
                     continue
+                codex = get_adapter("codex")
+                snapshot = codex.snapshot(info.name, _sid(info.jsonl))
                 marker = hook_state.get_state(_sid(info.jsonl))
-                if marker and marker[0] != "awaiting_input":
+                if snapshot is not None:
+                    info.state, info.label = snapshot.state, snapshot.label
+                elif marker and marker[0] != "awaiting_input":
                     # awaiting_input nao existe no Codex (o evento equivalente nao existe la); se
                     # aparecer, e marcador de outra coisa e nao vale mais que o default.
                     info.state = marker[0]
-                    if marker[0] != "working":
-                        self._label_cache.pop(info.name, None)
                 elif await asyncio.to_thread(codex_turno_aberto, info.jsonl):
                     # Turno andando no rollout e marcador nenhum = o hook nao esta rodando, e a
                     # unica causa conhecida e hook nao aprovado na TUI do Codex. Dizer isso e o que
                     # torna visivel o unico modo de falha deste desenho — calado, a sessao ficaria
                     # eternamente "ociosa" enquanto trabalha.
                     info.problema = "codex_hooks_nao_aprovados"
-                from app.adapters import get_adapter
-                info.pending_questions, info.question = get_adapter("codex").async_question_status(info.name)
+                if info.state != "working":
+                    self._label_cache.pop(info.name, None)
+                info.pending_questions, info.question = codex.async_question_status(info.name)
                 if info.pending_questions and info.state == "idle":
                     info.state = "awaiting_input"
                 if info.headless:
-                    pergunta, opcoes = get_adapter("codex").aprovacao_pendente(info.name)
+                    pergunta, opcoes = codex.aprovacao_pendente(info.name)
                     if pergunta:
                         info.state, info.question, info.options = "awaiting_input", pergunta, opcoes
-                    info.problema = get_adapter("codex").problema_de(info.name) or info.problema
+                    info.problema = codex.problema_de(info.name) or info.problema
                 continue
             if getattr(info, "headless", False):
                 # Claude sem terminal: NUNCA raspa pane (não há). Processo vivo responde pelo
