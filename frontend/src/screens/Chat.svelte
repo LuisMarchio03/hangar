@@ -3336,13 +3336,23 @@
 
   .chat-error {
     flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
     gap: var(--space-4);
     padding-top: var(--nav-h, 56px);
+    /* O composer e as pílulas acima dele ficam POR CIMA desta área: sem descontá-los, o fim do
+       conteúdo (as opções do cartão do Codex) caía atrás do composer, sem como rolar até lá. */
+    padding-bottom: calc(var(--cp-dock-h, 150px) + var(--cp-tts-h, 0px) + 56px);
+    overflow-y: auto;
   }
+  /* Centro com margem automática, não justify-content: quando o conteúdo passa da altura, a margem
+     vira zero e o topo continua alcançável pelo scroll (center cortaria o começo). */
+  .chat-error > :global(:first-child) { margin-top: auto; }
+  .chat-error > :global(:last-child) { margin-bottom: auto; }
+  /* Com a área rolando, o flex achataria a lista de passos (que tem scroll próprio) até sumir. */
+  .chat-error > :global(*) { flex-shrink: 0; }
 
   /* Vence o teto de 380px do `.chat-error` por especificidade (duas classes contra uma): aqui o
      conteúdo é um cartão de escolha, e ele acompanha a largura disponível até o teto do cartão. */
