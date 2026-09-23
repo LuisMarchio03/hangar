@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Server } from '../../lib/auth';
   import { getComputerControl, saveComputerControl, listComputerControlModels, createComputerControlTarget,
-    installComputerControl,
+    installComputerControl, testComputerControlHost,
     type ComputerControlState, type ComputerControlTarget } from '../../lib/credenciais';
   import EscopoChip from './EscopoChip.svelte';
   import * as m from '../../paraglide/messages';
@@ -56,23 +56,46 @@
   let newTimeout = $state('');
   let creating = $state(false);
   let newTargetError = $state('');
+  let testing = $state(false);
+  let testResult = $state<{ ok: boolean; detail: string } | null>(null);
+
+  // Mesma regra do backend: sem nome, "administrator@delphi-03" vira "delphi-03".
+  const derivedName = $derived(
+    newHost.trim().split('@').pop()!.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-._]+|[-._]+$/g, '').slice(0, 41),
+  );
+  const finalName = $derived(newName.trim() || (newTransport === 'ssh' ? derivedName : ''));
+
+  async function testConnection() {
+    if (testing || !newHost.trim()) return;
+    testing = true;
+    testResult = null;
+    try {
+      testResult = await testComputerControlHost(apiTarget, { host: newHost.trim(), proxy_command: newProxy.trim() });
+    } catch (e) {
+      testResult = { ok: false, detail: e instanceof Error ? e.message : String(e) };
+    } finally {
+      testing = false;
+    }
+  }
 
   async function createTarget() {
     if (creating) return;
     creating = true;
     newTargetError = '';
+    const name = finalName;
     try {
       const s = await createComputerControlTarget(apiTarget, {
-        project_dir: projectDir.trim(), name: newName.trim(), transport: newTransport,
+        project_dir: projectDir.trim(), name, transport: newTransport,
         host: newHost.trim(), proxy_command: newProxy.trim(),
         request_timeout: newTimeout ? Number(newTimeout) : null,
       });
-      const created = s.targets.find((t) => t.name === newName.trim());
+      const created = s.targets.find((t) => t.name === name);
       current = s;
       if (created) agentConfig = created.path;
       showNewTarget = false;
       newName = newHost = newProxy = newTimeout = '';
       newTransport = 'ssh';
+      testResult = null;
     } catch (e) {
       newTargetError = e instanceof Error ? e.message : String(e);
     } finally {
@@ -216,8 +239,6 @@
 
       {#if showNewTarget}
         <div class="new-target">
-          <label for="cc-new-name">{m.computer_control_target_name()}</label>
-          <input id="cc-new-name" name="cc-new-name" autocomplete="off" bind:value={newName} placeholder="delphi-03" spellcheck="false" />
           <div class="presets" role="radiogroup" aria-label={m.computer_control_target_kind()}>
             <button type="button" role="radio" aria-checked={newTransport === 'ssh'} class:on={newTransport === 'ssh'}
                     onclick={() => (newTransport = 'ssh')}>{m.computer_control_target_ssh()}</button>
@@ -225,16 +246,44 @@
                     disabled={!current.local_available} onclick={() => (newTransport = 'local')}>{m.computer_control_target_local()}</button>
           </div>
           {#if !current.local_available}<p class="hint">{m.computer_control_target_local_hint()}</p>{/if}
+
           {#if newTransport === 'ssh'}
             <label for="cc-new-host">{m.computer_control_target_host()}</label>
-            <input id="cc-new-host" name="cc-new-host" autocomplete="off" bind:value={newHost} placeholder="usuario@maquina" spellcheck="false" />
-            <label for="cc-new-proxy">{m.computer_control_target_proxy()}</label>
-            <input id="cc-new-proxy" name="cc-new-proxy" autocomplete="off" bind:value={newProxy} spellcheck="false" />
+            <div class="row">
+              <input id="cc-new-host" name="cc-new-host" autocomplete="off" list="cc-ssh-hosts" bind:value={newHost}
+                     oninput={() => (testResult = null)} placeholder="delphi-02" spellcheck="false" />
+              <button type="button" onclick={testConnection} disabled={testing || !newHost.trim()} aria-busy={testing}>
+                {testing ? m.computer_control_target_testing() : m.computer_control_target_test()}
+              </button>
+            </div>
+            <datalist id="cc-ssh-hosts">{#each current.ssh_hosts as h (h)}<option value={h}></option>{/each}</datalist>
+            <p class="hint">{m.computer_control_target_host_hint()}</p>
+            {#if testResult}
+              <p class={testResult.ok ? 'status' : 'err'} role="status">
+                {testResult.ok ? m.computer_control_target_test_ok() : m.computer_control_target_test_fail({ detail: testResult.detail })}
+              </p>
+            {/if}
           {/if}
-          <label for="cc-new-timeout">{m.computer_control_target_timeout()}</label>
-          <input id="cc-new-timeout" name="cc-new-timeout" autocomplete="off" type="number" min="1" max="600" bind:value={newTimeout} />
+
+          <label for="cc-new-name">{m.computer_control_target_name()}</label>
+          <input id="cc-new-name" name="cc-new-name" autocomplete="off" bind:value={newName}
+                 placeholder={derivedName || 'delphi-03'} spellcheck="false" />
+          <p class="hint">{m.computer_control_target_name_hint()}</p>
+
+          <details class="help">
+            <summary>{m.computer_control_target_advanced()}</summary>
+            {#if newTransport === 'ssh'}
+              <label for="cc-new-proxy">{m.computer_control_target_proxy()}</label>
+              <input id="cc-new-proxy" name="cc-new-proxy" autocomplete="off" bind:value={newProxy} spellcheck="false" />
+              <p class="hint">{m.computer_control_target_proxy_hint()}</p>
+            {/if}
+            <label for="cc-new-timeout">{m.computer_control_target_timeout()}</label>
+            <input id="cc-new-timeout" name="cc-new-timeout" autocomplete="off" type="number" min="1" max="600" bind:value={newTimeout} />
+            <p class="hint">{m.computer_control_target_timeout_hint()}</p>
+          </details>
+
           {#if newTargetError}<p class="err" role="alert">{newTargetError}</p>{/if}
-          <button type="button" class="action" onclick={createTarget} disabled={creating || !newName.trim()} aria-busy={creating}>
+          <button type="button" class="action" onclick={createTarget} disabled={creating || !finalName} aria-busy={creating}>
             {creating ? m.computer_control_target_creating() : m.computer_control_target_create()}
           </button>
         </div>
@@ -357,7 +406,8 @@
     display: flex; flex-direction: column; gap: var(--space-2);
     padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
   }
-  .new-target label { margin-top: 0; }
+  .new-target label { margin-top: var(--space-1); }
+  .new-target .help { display: flex; flex-direction: column; gap: var(--space-2); }
   .presets .on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
   .help summary { cursor: pointer; color: var(--text-secondary); font-size: var(--text-sm); }
   .help ol { margin-top: var(--space-2); }

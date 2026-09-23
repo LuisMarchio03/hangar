@@ -6495,6 +6495,17 @@ class ComputerControlTargetBody(_StrictBody):
     request_timeout: int | None = Field(default=None, ge=1, le=600)
 
 
+class ComputerControlTestHostBody(_StrictBody):
+    host: str
+    proxy_command: str = ""
+
+
+@app.post("/api/computer-control/test-host", dependencies=[Depends(require_auth)])
+def computer_control_test_host(body: ComputerControlTestHostBody):
+    from app import computer_control as cc
+    return _computer_control_call(cc.test_host, body.host, body.proxy_command)
+
+
 @app.post("/api/computer-control/install", dependencies=[Depends(require_auth)])
 def computer_control_install():
     from app import computer_control as cc

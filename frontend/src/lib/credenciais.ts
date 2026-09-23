@@ -183,6 +183,7 @@ export interface ComputerControlState {
   installed_tag: string;
   package_exists: boolean;
   targets: ComputerControlTarget[];
+  ssh_hosts: string[];              // os Host do ~/.ssh/config do servidor
   local_available: boolean;   // o servidor é Windows: "este computador" pode ser alvo
   enabled: boolean;
   project_dir: string;
@@ -224,6 +225,11 @@ export function saveComputerControl(target: Server | null, request: ComputerCont
 // Baixa a release: pode levar mais que o teto padrão de 8 s de uma chamada a outro servidor.
 export function installComputerControl(target: Server | null): Promise<ComputerControlState> {
   return em(target, '/api/computer-control/install', { method: 'POST' }, 180000);
+}
+
+export function testComputerControlHost(target: Server | null, request: { host: string; proxy_command?: string }):
+  Promise<{ ok: boolean; detail: string }> {
+  return em(target, '/api/computer-control/test-host', { method: 'POST', body: JSON.stringify(request) }, 30000);
 }
 
 export function createComputerControlTarget(target: Server | null, request: {

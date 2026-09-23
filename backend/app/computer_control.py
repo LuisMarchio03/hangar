@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import socket
+import subprocess
 import urllib.error
 import urllib.request
 import uuid
@@ -128,6 +129,48 @@ def _cliproxy_keys() -> list[str]:
     return keys
 
 
+def _ssh_hosts() -> list[str]:
+    """Os `Host` do ~/.ssh/config (sem os coringas): o que a pessoa já usa em `ssh <host>`."""
+    try:
+        lines = (Path.home() / ".ssh" / "config").read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    hosts: list[str] = []
+    for ln in lines:
+        item = re.match(r"^\s*Host\s+(.+)$", ln, re.IGNORECASE)
+        if item:
+            hosts += [h for h in item.group(1).split() if not any(c in h for c in "*?!")]
+    return list(dict.fromkeys(hosts))
+
+
+_HOST_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._@-]*")
+
+
+def _check_host(host: str) -> str:
+    host = host.strip()
+    if not _HOST_RE.fullmatch(host):   # nunca começa com '-': o valor vai pro argv do ssh
+        raise ComputerControlError(400, "erro_computer_control_target_host", "informe o host SSH (sem espaços)")
+    return host
+
+
+def test_host(host: str, proxy_command: str = "") -> dict:
+    """Entra por SSH sem senha e roda `echo ok`: é o que o agente vai precisar fazer."""
+    host = _check_host(host)
+    argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
+    if proxy_command.strip():
+        argv += ["-o", f"ProxyCommand={proxy_command.strip()}"]
+    argv += ["--", host, "echo", "ok"]
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, errors="replace", timeout=20,
+                           stdin=subprocess.DEVNULL)
+    except FileNotFoundError:
+        return {"ok": False, "detail": "ssh não encontrado neste servidor"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "detail": "sem resposta em 20 s"}
+    ok = r.returncode == 0 and "ok" in r.stdout
+    return {"ok": ok, "detail": "" if ok else ((r.stderr or r.stdout).strip()[-400:] or f"saiu com {r.returncode}")}
+
+
 def _cliproxy_running() -> bool:
     try:
         with socket.create_connection(("127.0.0.1", 8317), timeout=0.5):
@@ -193,6 +236,9 @@ def create_target(body: dict) -> dict:
         raise ComputerControlError(400, "erro_computer_control_dir",
                                    f"{project} não tem servidor_mcp.py e .venv/bin/python", dir=str(project))
     name = str(body.get("name") or "").strip()
+    if not name and body.get("transport") != "local":
+        # Sem nome, sai do host: "administrator@delphi-03" vira "delphi-03".
+        name = re.sub(r"[^a-z0-9._-]+", "-", str(body.get("host") or "").split("@")[-1].lower()).strip("-._")[:41]
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,40}", name):
         raise ComputerControlError(400, "erro_computer_control_target_name",
                                    "nome do alvo: letras minúsculas, números, ponto, hífen ou sublinhado")
@@ -207,10 +253,7 @@ def create_target(body: dict) -> dict:
                                        "este computador só pode ser alvo quando o Hangar roda no Windows")
         cfg = {"transport": "local", "command": [str(agent_exe)]}
     else:
-        host = str(body.get("host") or "").strip()
-        if not host or any(c.isspace() for c in host):
-            raise ComputerControlError(400, "erro_computer_control_target_host", "informe o host SSH (sem espaços)")
-        cfg = {"transport": "ssh", "host": host, "agent_path": str(agent_exe)}
+        cfg = {"transport": "ssh", "host": _check_host(str(body.get("host") or "")), "agent_path": str(agent_exe)}
         proxy = str(body.get("proxy_command") or "").strip()
         if proxy:
             cfg["proxy_command"] = proxy
@@ -241,6 +284,7 @@ def state() -> dict:
         "installed_tag": install.get("tag", ""),
         "package_exists": bool(install.get("tag")) and _package_exe().is_file(),
         "targets": targets,
+        "ssh_hosts": _ssh_hosts(),
         "local_available": os.name == "nt",
         "enabled": enabled,
         "project_dir": project,
