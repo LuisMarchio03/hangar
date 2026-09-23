@@ -2836,7 +2836,6 @@ def _nome_ocupado(nome: str) -> bool:
 
 def _bastao_preparar(info: SessionInfo, origem: str, destino: str,
                      por_modelo: bool = False) -> tuple[str, Path, str, str | None]:
-    _passo(destino, "resumo")
     """Monta o resumo, GRAVA e devolve (texto, caminho, kick-off, aviso). Tudo sync, numa thread só.
 
     Gravar antes de criar a sessão é o que fecha o caso "sessão nova viva apontando pra um arquivo
@@ -2846,6 +2845,7 @@ def _bastao_preparar(info: SessionInfo, origem: str, destino: str,
     se der certo. A reescrita nunca levanta: falhando, grava o de código e devolve o aviso, porque
     uma continuação sem a camada interpretada é muito melhor que continuação nenhuma.
     """
+    _passo(destino, "resumo")
     texto = bastao_montar(info.jsonl, info.cwd, info.provider, origem, info.codex_home)
     aviso = None
     if por_modelo:

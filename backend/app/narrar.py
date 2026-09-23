@@ -269,8 +269,10 @@ def sugerir_tarefa_grupo(conversas: dict[str, str]) -> str:
     Levanta NarrarError como chamar_chat."""
     prompt = "\n\n".join(f"## Sessão {nome}\n{texto}" for nome, texto in conversas.items())
     bruto = chamar_chat(_SYSTEM_TAREFA_GRUPO, prompt, temperature=0.3, timeout=45)
-    linha = next((ln for ln in _normalizar_saida(bruto).splitlines() if ln), "")
-    return linha.strip("\"'`* ")
+    linha = next((ln for ln in _normalizar_saida(bruto).splitlines() if ln), "").strip("\"'`* ")
+    if not linha:
+        raise NarrarError(502, "o modelo não devolveu nenhuma sugestão")
+    return linha
 
 
 # Limpeza do ditado. O usuario dita PROMPTS: nome de sessao, caminho, comando, chave de ticket. Um

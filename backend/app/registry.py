@@ -140,7 +140,8 @@ def cwd_atual(meta: dict) -> str | None:
             if chave[:16].encode() not in fh.read():
                 return cwd   # pid reaproveitado por outro processo
         vivo = os.readlink(f"/proc/{pid}/cwd")
-    except OSError:
+    except OSError as e:
+        _log.debug("cwd_atual: sem pasta viva de %s (pid %s): %s", meta.get("name"), pid, e)
         return cwd
     return vivo if os.path.isdir(vivo) else cwd
 
