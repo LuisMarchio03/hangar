@@ -813,8 +813,9 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     // A pergunta do bloco é "qual endereço o X deve usar para chegar aqui?": o que se digita é o
     // endereço DESTA máquina, para gravar LÁ. Isto era assertado como `base_url` do próprio peer
     // — o lado oposto ao que a frase promete, e o botão consertava o endereço errado.
+    // A volta fala com o B da LISTA (srv-b): é por esse id que a resposta limpa a marca de offline.
     expect(peersMock.gravarPeer).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'notebook', baseUrl: 'http://192.168.0.77:8765', token: 'segredo' }),
+      expect.objectContaining({ id: 'srv-b', baseUrl: 'http://192.168.0.77:8765', token: 'segredo' }),
       expect.objectContaining({ id: 'casa', base_url: 'http://novo:9999' }),
     );
     // e o peer continua registrado aqui no endereço DELE, que o gesto não estava corrigindo
