@@ -2648,8 +2648,12 @@
   // dava "sessão não encontrada".
   async function abrirRemetente(from: string) {
     const cache = sessionsStore.identities;
+    // Servidor fora do ar segura a resposta até o timeout: se a pessoa já saiu desta tela, o clique
+    // velho não pode trocar o servidor ativo nem navegar por cima do que ela abriu depois.
+    const hashDoClique = window.location.hash;
     const destino = await destinoDoRemetente(from, listServers(), getActiveId(),
       async (s) => cache.get(s.id) ?? (await getIdentificador(s)).identificador);
+    if (window.location.hash !== hashDoClique) return;
     if (!destino) { mostrarAviso(m.user_remetente_fora_do_aparelho({ n: from })); return; }
     if (destino.serverId && !selectServer(destino.serverId)) return;
     onNavigateToChat(destino.name);

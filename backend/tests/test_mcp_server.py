@@ -106,6 +106,25 @@ async def test_enviar_prefixa_de_e_nao_recusa_caminho_nativo(identidade, monkeyp
         assert res.is_error and "é esta sessão" in res.content[0].text and len(enviados) == 3
 
 
+async def test_enviar_nao_dobra_o_prefixo_escrito_pelo_modelo(identidade, monkeypatch):
+    from app import api, peers
+    locais, remotos = [], []
+
+    async def input_prompt(name, body):
+        locais.append(body.text)
+        return {"delivered": True}
+
+    monkeypatch.setattr(api, "input_prompt", input_prompt)
+    monkeypatch.setattr(peers, "call", lambda srv, metodo, rota, corpo: remotos.append(corpo["text"]) or (200, {}))
+    monkeypatch.setattr(settings, "server_id", "srv1")
+    async with sessao_mcp({"X-Hangar-Pane": "%3"}) as s:
+        await s.call_tool("send", {"alvo": "outra", "texto": "[de: srv1::eu] oi"})
+        await s.call_tool("send", {"alvo": "srv2::outra", "texto": "[de: eu] oi"})
+        await s.call_tool("send", {"alvo": "srv2::outra", "texto": "[de: ::eu] oi"})
+    assert locais == ["[de: eu] oi"]
+    assert remotos == ["[de: srv1::eu] oi", "[de: srv1::eu] [de: ::eu] oi"]
+
+
 async def test_sessoes_marca_a_propria(identidade, monkeypatch):
     from types import SimpleNamespace
     from app import api

@@ -343,8 +343,8 @@ def menu_codex(pane_text: str) -> Optional[tuple[Optional[str], list[str]]]:
 _CURSOR_SEM_NUMERO_RE = re.compile(r"^(\s*❯\s+)\S")
 
 
-def _menu_sem_numero(lines: list[str]) -> Optional[tuple[Optional[str], list[str]]]:
-    """(pergunta, opcoes) do diálogo sem numeração, ou None.
+def _menu_sem_numero(lines: list[str]) -> Optional[tuple[Optional[str], list[str], int]]:
+    """(pergunta, opcoes, posicao do cursor 1-based) do diálogo sem numeração, ou None.
 
     Só é menu vivo sem régua ABAIXO do cursor: o `❯ ` do composer mora sempre entre duas réguas,
     e uma citação no scrollback tem o composer embaixo dela. As opções são as linhas contíguas
@@ -372,7 +372,13 @@ def _menu_sem_numero(lines: list[str]) -> Optional[tuple[Optional[str], list[str
     # A pergunta é o título: primeira linha com texto depois da régua que abre o diálogo.
     inicio = max((i for i in range(top) if _RULE_RE.match(lines[i])), default=-1) + 1
     question = next((ln.strip() for ln in lines[inicio:top] if ln.strip()), None)
-    return question, options
+    return question, options, cursor - top + 1
+
+
+def cursor_sem_numero(pane_text: str) -> Optional[int]:
+    """Opção (1-based) sob o cursor do diálogo sem numeração, ou None sem diálogo na tela."""
+    menu = _menu_sem_numero(pane_text.splitlines())
+    return menu[2] if menu else None
 
 
 def classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optional[list[str]]]:

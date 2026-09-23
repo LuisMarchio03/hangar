@@ -113,8 +113,8 @@ async def send(ctx: Context, alvo: str, texto: str, tmux: bool = False) -> dict[
                         "Quem é quem: tool `sessoes` (campo `voce`).")
     # Modelo que escreve "[de: eu] …" por conta própria não ganha o prefixo em dobro — com ou sem o
     # "<servidor>::" na frente, que é como o envio pra outro servidor qualifica o remetente.
-    texto = re.sub(rf"^\s*\[de:\s*(?:{re.escape(settings.server_id or '')}::)?{re.escape(eu)}\]\s*",
-                   "", texto)
+    servidor = rf"(?:{re.escape(settings.server_id)}::)?" if settings.server_id else ""
+    texto = re.sub(rf"^\s*\[de:\s*{servidor}{re.escape(eu)}\]\s*", "", texto)
     if peers.is_remote(alvo):
         srv, sess = peers.split_addr(alvo)
         if not settings.server_id:

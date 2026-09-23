@@ -64,7 +64,6 @@ vi.mock('@hangar/core', async (importOriginal) => ({
   providerTag: () => null,
   cwdParts: (c: string | undefined) => ({ prefix: '', base: c ?? '' }),
  loopBadge: () => null, LOOP_TONE_COLOR: {},
- planBadge: () => null,
 }));
 vi.mock('../lib/auth', () => ({
   getActiveId: vi.fn(() => null),
@@ -104,7 +103,6 @@ vi.mock('./git/RepoMenu.svelte', stubDe);
 vi.mock('./LoopSheet.svelte', stubDe);
 vi.mock('./SessionSwitcherSheet.svelte', stubDe);
 vi.mock('./HoverPreview.svelte', stubDe);
-vi.mock('./PlanBar.svelte', stubDe);
 vi.mock('./WorkspaceNav.svelte', stubDe);
 
 const authMock = vi.mocked(auth);
