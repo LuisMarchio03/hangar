@@ -182,6 +182,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_path_invalido: () => m.erro_path_invalido(),
   erro_projeto_nao_encontrado: () => m.erro_projeto_nao_encontrado(),
   erro_transcript_nao_encontrado: () => m.erro_transcript_nao_encontrado(),
+  erro_trecho_nao_encontrado: () => m.erro_trecho_nao_encontrado(),
   erro_nao_encontrado: () => m.erro_nao_encontrado(),
   erro_imagem_nao_encontrada: () => m.erro_imagem_nao_encontrada(),
   erro_cwd_ausente: () => m.erro_cwd_ausente(),

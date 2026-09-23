@@ -103,13 +103,15 @@
      *  chegar a cauda do servidor, trocar de transcript). Cada mudanca re-ancora a janela na cauda
      *  — ver `ancoraVista`. Quem nao carrega historico (Archive, ActivitySheet) nao passa. */
     ancora?: number;
+    /** Mensagem pra abrir rolada até ela (trecho escolhido na busca). */
+    focoId?: string | null;
   }
 
   let {
     events, stateEvent, pending, sessionName, dockH, preview = '', previewMd = false, previewFull = false, previewVivo = false, pensamento = '', ferramenta = null, onSelectOption, onSubmitSelected, onCancel, agentesRodando = [], onAbrirAgente = undefined,
     askOpen = false, askPayload = null, askActive = false, onAnswer, onAskClose, onFimDoLocal,
     imageUrl, swapIds, codex = false, plan = null, footer,
-    onForward, onOpenSession, onOpenOrq, onDescartarFila, ancora = 0
+    onForward, onOpenSession, onOpenOrq, onDescartarFila, ancora = 0, focoId = null
   }: Props = $props();
 
   type PlanComponentProps = {
@@ -464,6 +466,21 @@
     tick().then(() => { scrollToBottom(); preencherTela(); });
   });
 
+  // Abre no trecho da busca: alarga a janela até a mensagem e solta o fim, senão o auto-scroll
+  // puxaria a tela de volta pra cauda.
+  let alvoEl: HTMLElement | undefined = $state();
+  let focoAplicado: string | null = null;
+  $effect(() => {
+    const id = focoId;
+    if (!id || id === focoAplicado || !windowEnd) return;
+    const i = events.findIndex((e) => e.id === id);
+    if (i < 0) return;
+    focoAplicado = id;
+    atBottom = false;
+    if (i < windowStart) extra += windowStart - i + 10;
+    tick().then(() => requestAnimationFrame(() => alvoEl?.scrollIntoView({ block: 'start' })));
+  });
+
   let rafScroll = 0;
   function scrollToBottom() {
     // Coalesce as escritas num rAF: o preview muda a cada ~150ms (e ate token a token), e uma
@@ -494,6 +511,9 @@
 >
   <div class="messages-inner">
     {#each renderItems as item (item.id)}
+      {#if focoId && item.id === focoId}
+        <div class="alvo-busca" bind:this={alvoEl}>{m.busca_trecho_aqui()}</div>
+      {/if}
       {#if item.type === 'tasks'}
         <TaskRows tasks={tarefas} />
       {:else if item.type === 'group'}
@@ -726,6 +746,21 @@
 {/if}
 
 <style>
+  .alvo-busca {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--accent);
+    scroll-margin-top: var(--space-6);
+  }
+  .alvo-busca::before, .alvo-busca::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--accent-dim);
+  }
   /* `.message-list` e `.messages-inner` são alcançados de fora: o painel de Atividade embute esta
      lista para mostrar a conversa de um subagente e precisa anular, com `!important`, a reserva da
      coluna de contexto (o padding-direito que o Chat aplica) e o teto da coluna de leitura — numa

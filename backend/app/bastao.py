@@ -891,7 +891,8 @@ def reescrever_com_modelo(texto: str, config_dir: str | None = None,
         env["CLAUDE_CONFIG_DIR"] = config_dir
     try:
         p = subprocess.run(
-            [exe, "-p", "--model", modelo, "--disallowedTools", *_REESCRITA_NEGADAS],
+            [exe, "-p", "--model", modelo, "--no-session-persistence",
+             "--disallowedTools", *_REESCRITA_NEGADAS],
             input=_REESCRITA_PEDIDO + texto, cwd=tempfile.gettempdir(), env=env,
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=_REESCRITA_TIMEOUT,

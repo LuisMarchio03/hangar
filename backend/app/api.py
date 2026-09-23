@@ -6454,6 +6454,27 @@ def search_transcripts(q: str = ""):
     return search(q, live)
 
 
+@app.get("/api/search/context", dependencies=[Depends(require_auth)], response_model=list[ChatEvent])
+def search_context(project: str, session_id: str, event_id: str, around: int = 3):
+    """Mensagens em volta de um trecho da busca: ele e as `around` anteriores e posteriores, só as
+    suas e as do assistente (é o que se lê pra entender o trecho)."""
+    try:
+        p = archive_jsonl(project, session_id)
+    except ValueError:
+        raise HTTPException(400, detail=erro("erro_path_invalido", "invalid path"))
+    except FileNotFoundError:
+        raise HTTPException(404, detail=erro("erro_transcript_nao_encontrado", "transcript not found"))
+    from app.pqueue import merged_history
+    msgs = [ev for ev in merged_history("__archive__", str(p))
+            if ev.kind in ("user_msg", "assistant_msg") and ev.text]
+    i = next((k for k, ev in enumerate(msgs) if ev.id == event_id), None)
+    if i is None:
+        raise HTTPException(404, detail=erro("erro_trecho_nao_encontrado",
+                                             "a mensagem não está mais nessa conversa"))
+    n = max(0, min(around, 10))
+    return msgs[max(0, i - n):i + n + 1]
+
+
 class AskHistoryBody(_StrictBody):
     question: str = Field(min_length=1, max_length=500)
 

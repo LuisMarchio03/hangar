@@ -265,7 +265,9 @@ def _claude_p(prompt: str) -> str:
         raise ClaudePError("claude CLI não encontrado")
     try:
         p = subprocess.run(
-            [exe, "-p", "--model", "sonnet", "--disallowedTools", *_REFINE_DISALLOWED],
+            # Sem persistir: a conversa gravada em /tmp aparecia na busca como se fosse do usuário.
+            [exe, "-p", "--model", "sonnet", "--no-session-persistence",
+             "--disallowedTools", *_REFINE_DISALLOWED],
             input=prompt, cwd=tempfile.gettempdir(), capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=_REFINE_TIMEOUT,
         )

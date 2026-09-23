@@ -542,7 +542,7 @@
     <Uso onBack={voltarDoRelatorio} />
   {:else if route.name === 'archive'}
     <!-- Remonta ao trocar de deep-link (busca -> outra conversa): reabre com o novo alvo. -->
-    {#key route.deepLink ? `${route.deepLink.serverId}/${route.deepLink.project}/${route.deepLink.sessionId}` : ''}
+    {#key route.deepLink ? `${route.deepLink.serverId}/${route.deepLink.project}/${route.deepLink.sessionId}/${route.deepLink.eventId ?? ''}` : ''}
       <Archive onBack={() => navigateTo('#/')} deepLink={route.deepLink ?? null} />
     {/key}
   {:else if route.name === 'compare'}

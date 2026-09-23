@@ -1228,6 +1228,17 @@ export interface SearchHit {
   line: string;                 // trecho legivel (texto da msg) ja capado no backend
   mtime: number;
   live: boolean;
+  role?: 'user' | 'assistant' | null;  // quem escreveu a mensagem casada
+  event_id?: string | null;            // id do evento no histórico: abre a conversa no ponto
+  ts?: number | null;                  // quando a mensagem foi escrita
+}
+
+// A mensagem do trecho e as vizinhas (suas e do assistente), pra ler sem sair da busca.
+export async function getSearchContextForServer(
+  s: Server, project: string, sessionId: string, eventId: string,
+): Promise<ChatEvent[]> {
+  const q = new URLSearchParams({ project, session_id: sessionId, event_id: eventId });
+  return apiFetchForServer(s, `/api/search/context?${q}`);
 }
 
 // Busca em UM servidor (baseUrl+token explicitos), sem mexer no ativo — a UI faz fan-out por servidor
@@ -1249,9 +1260,10 @@ export async function askHistoryForServer(
 }
 
 export async function searchTranscriptsForServer(s: Server, q: string): Promise<SearchHit[]> {
+  // 30s: a busca varre as conversas de todas as contas; um termo raro percorre tudo antes de parar.
   const res = await fetch(`${s.baseUrl}/api/search?q=${encodeURIComponent(q)}`, {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
-    signal: AbortSignal.timeout(4000),
+    signal: AbortSignal.timeout(30000),
   });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json() as Promise<SearchHit[]>;
