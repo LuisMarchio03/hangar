@@ -161,7 +161,10 @@ def test_host(host: str, proxy_command: str = "") -> dict:
     host = _check_host(host)
     # accept-new: máquina nova não tem host key conhecida e o teste é justamente o primeiro contato.
     # Chave que MUDOU continua recusada.
-    argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=accept-new"]
+    ssh = shutil.which("ssh")
+    if not ssh:
+        return {"ok": False, "detail": "ssh não encontrado neste servidor"}
+    argv = [ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=accept-new"]
     if proxy_command.strip():
         argv += ["-o", f"ProxyCommand={proxy_command.strip()}"]
     argv += ["--", host, "echo", "ok"]
@@ -178,8 +181,11 @@ def test_host(host: str, proxy_command: str = "") -> dict:
 
 def _ssh_identity(host: str) -> tuple[str, str]:
     """(usuário, chave pública) que o `ssh` usaria pra esse host, pela resolução do próprio `ssh -G`."""
+    ssh = shutil.which("ssh")
+    if not ssh:
+        return "", ""
     try:
-        r = subprocess.run(["ssh", "-G", "--", host], capture_output=True, text=True, errors="replace", timeout=10,
+        r = subprocess.run([ssh, "-G", "--", host], capture_output=True, text=True, errors="replace", timeout=10,
                            stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):
         return "", ""

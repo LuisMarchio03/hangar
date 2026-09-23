@@ -145,12 +145,12 @@ describe('servidor desligado', () => {
       expect(guardado.get('hangar_servidores_desligados')).toContain('pc');
       const saved = guardado.get('hangar_servidores_desligados')!;
       vi.useFakeTimers();
-      vi.advanceTimersByTime(20000);
+      vi.advanceTimersByTime(1500);
       _limparEsfriamentoParaTestes();          // simula o app subindo de novo…
       guardado.set('hangar_servidores_desligados', saved);
       expect(estaDesligado('pc')).toBe(true);  // …e a marca continua lá
-      expect(retryAfterMs('pc')).toBeGreaterThan(9000);
-      expect(retryAfterMs('pc')).toBeLessThanOrEqual(10000);
+      expect(retryAfterMs('pc')).toBeGreaterThan(400);
+      expect(retryAfterMs('pc')).toBeLessThanOrEqual(500);
     } finally {
       definirArmazem(null);
     }
