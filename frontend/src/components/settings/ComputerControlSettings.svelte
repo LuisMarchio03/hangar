@@ -1,5 +1,7 @@
 <script lang="ts">
   import type { Server } from '../../lib/auth';
+  // Endereço, não frase: é o mesmo texto em qualquer idioma.
+  const CLIPROXY_RELEASES = 'https://github.com/router-for-me/CLIProxyAPI/releases';
   import { getComputerControl, saveComputerControl, listComputerControlModels, createComputerControlTarget,
     installComputerControl, testComputerControlHost, getComputerControlWindowsSetup,
     type ComputerControlState, type ComputerControlTarget } from '../../lib/credenciais';
@@ -370,7 +372,7 @@
         <details class="help" open={!current.cliproxy.installed || !current.cliproxy.running}>
           <summary>{m.computer_control_cliproxy_how()}</summary>
           <ol>
-            <li>{m.computer_control_cliproxy_step_install()} <a href="https://github.com/router-for-me/CLIProxyAPI/releases" target="_blank" rel="noreferrer">github.com/router-for-me/CLIProxyAPI/releases</a></li>
+            <li>{m.computer_control_cliproxy_step_install()} <a href={CLIPROXY_RELEASES} target="_blank" rel="noreferrer">{CLIPROXY_RELEASES.replace('https://', '')}</a></li>
             <li>{m.computer_control_cliproxy_step_service()}</li>
             <li>{m.computer_control_cliproxy_step_panel()} <a href="http://127.0.0.1:8317/management.html" target="_blank" rel="noreferrer">http://127.0.0.1:8317/management.html</a></li>
             <li>{m.computer_control_cliproxy_step_key()}</li>

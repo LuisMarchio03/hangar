@@ -185,7 +185,7 @@ export interface ComputerControlState {
   package_exists: boolean;
   targets: ComputerControlTarget[];
   ssh_hosts: string[];              // os Host do ~/.ssh/config do servidor
-  local_available: boolean;   // o servidor é Windows: "este computador" pode ser alvo
+  local_available: boolean;   // o servidor é Windows: a própria máquina pode ser alvo
   enabled: boolean;
   project_dir: string;
   agent_config: string;

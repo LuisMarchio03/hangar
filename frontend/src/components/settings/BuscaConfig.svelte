@@ -136,6 +136,13 @@
     { tela: 'orquestracao', rotulo: m.orqcfg_pode_usar, descricao: m.orqcfg_pode_usar_desc },
     { tela: 'orquestracao', rotulo: m.orqcfg_pode_trocar, descricao: m.orqcfg_pode_trocar_desc },
     { tela: 'orquestracao', rotulo: m.orqcfg_escolha_conta, descricao: m.orqcfg_modelos_liberados_porque },
+
+    { tela: 'computer', rotulo: m.computer_control_enable, descricao: m.computer_control_enable_hint },
+    { tela: 'computer', rotulo: m.computer_control_install, descricao: m.computer_control_mode_local_hint },
+    { tela: 'computer', rotulo: m.computer_control_target, descricao: m.computer_control_target_hint },
+    { tela: 'computer', rotulo: m.computer_control_new_target, descricao: m.computer_control_target_host_hint },
+    { tela: 'computer', rotulo: m.computer_control_setup_title, descricao: m.computer_control_setup_hint },
+    { tela: 'computer', rotulo: m.computer_control_llm, descricao: m.computer_control_llm_hint },
   ];
 
   // Acento não pode separar "voz" de "vôz" nem "cota" de "cotá": a comparação é sempre sem marca.
