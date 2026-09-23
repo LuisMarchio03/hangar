@@ -193,7 +193,7 @@ export interface ComputerControlState {
   jev_key_set: boolean;
   jev_key_tail: string;
   jev_key_from_settings: boolean;
-  cliproxy: { preset_url: string; has_keys: boolean; key_is_cliproxy: boolean };
+  cliproxy: { preset_url: string; has_keys: boolean; key_is_cliproxy: boolean; installed: boolean; running: boolean };
   files: { path: string; enabled: boolean }[];
 }
 

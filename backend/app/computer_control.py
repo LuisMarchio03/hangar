@@ -7,6 +7,8 @@ a chave desse MCP é tocada: o resto do arquivo é estado do CLI daquela conta.
 import json
 import os
 import re
+import shutil
+import socket
 import urllib.error
 import urllib.request
 import uuid
@@ -113,6 +115,14 @@ def _cliproxy_keys() -> list[str]:
     return keys
 
 
+def _cliproxy_running() -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", 8317), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
 def _jev_from_settings() -> str:
     try:
         env = json.loads((Path.home() / ".claude" / "settings.json").read_text(encoding="utf-8")).get("env") or {}
@@ -212,6 +222,7 @@ def state() -> dict:
         "jev_key_tail": _tail(jev or jev_settings),
         "jev_key_from_settings": not jev and bool(jev_settings),
         "cliproxy": {"preset_url": PRESET_URL, "has_keys": bool(cliproxy),
+                     "installed": shutil.which("cli-proxy-api") is not None, "running": _cliproxy_running(),
                      "key_is_cliproxy": bool(llm_key) and llm_key in cliproxy},
         "files": [{"path": str(p), "enabled": _entry(p) is not None} for p in _config_files()],
     }

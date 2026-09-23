@@ -226,10 +226,15 @@
       </div>
 
       {#if preset === 'cliproxy'}
-        <p class="hint">{current.cliproxy.has_keys ? m.computer_control_cliproxy_key_ok() : m.computer_control_cliproxy_no_key()}</p>
-        <details class="help">
+        <p class="hint">
+          {!current.cliproxy.installed ? m.computer_control_cliproxy_not_installed()
+            : !current.cliproxy.running ? m.computer_control_cliproxy_stopped()
+            : current.cliproxy.has_keys ? m.computer_control_cliproxy_key_ok() : m.computer_control_cliproxy_no_key()}
+        </p>
+        <details class="help" open={!current.cliproxy.installed || !current.cliproxy.running}>
           <summary>{m.computer_control_cliproxy_how()}</summary>
           <ol>
+            <li>{m.computer_control_cliproxy_step_install()} <a href="https://github.com/router-for-me/CLIProxyAPI/releases" target="_blank" rel="noreferrer">github.com/router-for-me/CLIProxyAPI/releases</a></li>
             <li>{m.computer_control_cliproxy_step_service()}</li>
             <li>{m.computer_control_cliproxy_step_panel()} <a href="http://127.0.0.1:8317/management.html" target="_blank" rel="noreferrer">http://127.0.0.1:8317/management.html</a></li>
             <li>{m.computer_control_cliproxy_step_key()}</li>
