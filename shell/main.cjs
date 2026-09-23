@@ -119,7 +119,7 @@ input{padding:10px;border-radius:8px;border:1px solid #3a373f;background:#232028
 button{padding:10px;border-radius:8px;border:0;background:#6b5bd6;color:#fff;cursor:pointer}
 p{opacity:.7;margin:0 0 4px}</style>
 <form onsubmit="location.href=this.u.value;return false">
-  <p>Não consegui carregar a interface. Qual o endereço do seu cockpit?</p>
+  <p>Não consegui carregar a interface. Qual o endereço do seu Hangar?</p>
   <input name="u" value="${segura}" autofocus>
   <button>Abrir</button>
 </form>`;
