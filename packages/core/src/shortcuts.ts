@@ -46,6 +46,10 @@ function valido(item: unknown): item is Shortcut {
   if (typeof item !== 'object' || item === null) return false;
   const o = item as Record<string, unknown>;
   if (typeof o.id !== 'string' || !o.id.trim()) return false;
+  // Opcionais com tipo errado derrubariam quem lê (o ícone chama `.startsWith`).
+  if (o.icon !== undefined && typeof o.icon !== 'string') return false;
+  if (o.confirm !== undefined && typeof o.confirm !== 'boolean') return false;
+  if (o.send_direct !== undefined && typeof o.send_direct !== 'boolean') return false;
   if (o.type === 'internal') {
     return INTERNAL_ACTIONS.includes(o.action as ShortcutInternalAction);
   }
@@ -73,7 +77,9 @@ export function resolveShortcuts(raw: string | null | undefined): Shortcut[] {
     return defaultShortcuts();
   }
   if (!Array.isArray(dados)) return defaultShortcuts();
-  return dados.filter(valido);
+  // id repetido quebra o {#each} com chave: fica o primeiro.
+  const seen = new Set<string>();
+  return dados.filter(valido).filter((s) => !seen.has(s.id) && !!seen.add(s.id));
 }
 
 export function serializeShortcuts(lista: Shortcut[]): string {

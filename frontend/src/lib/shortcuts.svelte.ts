@@ -8,7 +8,9 @@ import {
 import { getActiveId, listServers } from './auth';
 
 const listas = $state<Record<string, Shortcut[]>>({});
-const emVoo = new Set<string>();
+// Promessa, não flag: quem chega com a busca em voo tem de esperar a lista real, senão o editor
+// abre com o conjunto nativo e salvar apagaria a config da pessoa.
+const inFlight = new Map<string, Promise<void>>();
 
 function chaveDe(serverId?: string | null): string {
   return serverId || getActiveId() || '';
@@ -20,21 +22,22 @@ export function shortcutsDe(serverId?: string | null): Shortcut[] {
   return listas[chaveDe(serverId)] ?? defaultShortcuts();
 }
 
-export async function carregarShortcuts(serverId?: string | null): Promise<void> {
+/** Falha rejeita: enquanto isso a fileira segue no default nativo, e quem chama decide como
+ * mostrar o erro. Não cacheia a falha — a próxima chamada tenta de novo. */
+export function carregarShortcuts(serverId?: string | null): Promise<void> {
   const k = chaveDe(serverId);
-  if (!k || k in listas || emVoo.has(k)) return;
-  emVoo.add(k);
-  try {
+  if (!k || k in listas) return Promise.resolve();
+  const pending = inFlight.get(k);
+  if (pending) return pending;
+  const load = (async () => {
     const s = serverId && serverId !== getActiveId()
       ? listServers().find((x) => x.id === serverId)
       : null;
     const c = s ? await getConfigForServer(s) : await getConfig();
     listas[k] = resolveShortcuts(String(c.campos.shortcuts?.valor ?? ''));
-  } catch {
-    // Sem config (servidor antigo, rede) a fileira fica no default nativo — nunca some.
-  } finally {
-    emVoo.delete(k);
-  }
+  })().finally(() => inFlight.delete(k));
+  inFlight.set(k, load);
+  return load;
 }
 
 /** Grava a lista no servidor e atualiza o cache. `null` = remover o override (volta ao nativo). */

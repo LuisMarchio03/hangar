@@ -174,13 +174,15 @@ def remember(cwd: str, command: str) -> None:
 
 def custom_commands(cwd: str) -> list[Runner]:
     """Comandos personalizados do projeto, na ordem gravada. Item malformado (edicao manual do
-    arquivo) e descartado calado — a lista nao pode derrubar o GET /runners inteiro."""
+    arquivo) e descartado com aviso no log — a lista nao pode derrubar o GET /runners inteiro."""
     out = []
-    for item in _entry(cwd)["custom"]:
+    for i, item in enumerate(_entry(cwd)["custom"]):
         if (isinstance(item, dict)
                 and isinstance(item.get("label"), str) and item["label"].strip()
                 and isinstance(item.get("command"), str) and item["command"].strip()):
             out.append(Runner(label=item["label"], command=item["command"], source="custom"))
+        else:
+            _log.warning("runner: comando personalizado %d malformado em %s, descartado", i, cwd)
     return out
 
 

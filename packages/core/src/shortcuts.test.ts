@@ -33,6 +33,17 @@ describe('resolveShortcuts', () => {
     expect(resolveShortcuts(raw)).toEqual(lista);
   });
 
+  it('opcional com tipo errado descarta o item; id repetido fica só o primeiro', () => {
+    const ok: Shortcut = { id: 'a1', type: 'shell', label: 'Editor', command: 'code .' };
+    const raw = JSON.stringify([
+      ok,
+      { id: 'a2', type: 'shell', label: 'X', command: 'x', icon: 42 },
+      { id: 'a3', type: 'send_text', label: 'Y', text: '/y', send_direct: 'nao' },
+      { ...ok, label: 'Duplicado' },
+    ]);
+    expect(resolveShortcuts(raw)).toEqual([ok]);
+  });
+
   it('roundtrip serialize → resolve preserva a lista', () => {
     const lista: Shortcut[] = [
       { id: 'a2', type: 'shell', label: 'Editor', command: 'code .', confirm: true },

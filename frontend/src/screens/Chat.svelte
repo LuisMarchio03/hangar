@@ -2665,7 +2665,10 @@
   // Terminal/Anexos dentro do "⋯" seria a mesma ação com dois nomes.
   const atalhosCustom = $derived(atalhos.filter(
     (s): s is ShortcutSendText | ShortcutShell => s.type !== 'internal'));
-  $effect(() => { void carregarShortcuts(); });
+  $effect(() => {
+    // A fileira segue no conjunto nativo; o erro de verdade aparece ao abrir a tela de Atalhos.
+    carregarShortcuts().catch((err) => console.error('shortcuts load error:', err));
+  });
   // Atalho com a flag "confirmar antes": segura aqui e o ConfirmSheet decide.
   let atalhoPendente = $state<ShortcutSendText | ShortcutShell | null>(null);
 
@@ -2675,19 +2678,16 @@
   }
 
   async function executarAtalho(s: ShortcutSendText | ShortcutShell) {
-    if (s.type === 'shell') {
-      try {
-        await runShortcutShell(sessionName, s.command);
-      } catch (err) {
-        // O 202 é só "o processo nasceu"; o que chega aqui é spawn/rede — e tem que aparecer,
-        // senão o clique não faz ABSOLUTAMENTE NADA em silêncio (mesma lição do handleSelect).
-        console.error('shortcut-shell error:', err);
-        mostrarAviso(err);
-      }
-      return;
+    // O 202 do shell é só "o processo nasceu", e o handleSend lança pro Composer mostrar — aqui
+    // não há Composer no meio, então sem este aviso o clique falho não faz NADA em silêncio.
+    try {
+      if (s.type === 'shell') await runShortcutShell(sessionName, s.command);
+      else if (sendsDirect(s)) await handleSend(s.text);
+      else await composerRef?.prefillText(s.text);
+    } catch (err) {
+      console.error('shortcut error:', err);
+      mostrarAviso(err);
     }
-    if (sendsDirect(s)) await handleSend(s.text);
-    else await composerRef?.prefillText(s.text);
   }
 
   // Chip "de: X" do recado. `X` pode ser `servidor::sessao`: abrir isso como nome no servidor ativo

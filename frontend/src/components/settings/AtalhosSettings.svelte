@@ -27,16 +27,22 @@
   let sujo = $state(false);
 
   async function carregar() {
+    // Servidor fixado na entrada: se o alvo trocar durante a busca, a resposta velha não pode
+    // sobrescrever a lista (e a edição) do servidor novo.
+    const target = serverId;
     carregando = true;
     erroCarregar = false;
     try {
-      await carregarShortcuts(serverId);
-      lista = shortcutsDe(serverId).map((s) => ({ ...s }));
+      await carregarShortcuts(target);
+      if (target !== serverId) return;
+      lista = shortcutsDe(target).map((s) => ({ ...s }));
       sujo = false;
-    } catch {
+    } catch (err) {
+      if (target !== serverId) return;
+      console.error('shortcuts load error:', err);
       erroCarregar = true;
     } finally {
-      carregando = false;
+      if (target === serverId) carregando = false;
     }
   }
   $effect(() => { serverId; void carregar(); });
@@ -101,8 +107,11 @@
   // ── Arrastar pra reordenar. HTML5 DnD não responde ao toque em tablet (regra do repo), então
   // os botões ↑/↓ ficam — são a alternativa exigida pela WCAG 2.2 SC 2.5.7, não redundância. ──
   let dragIdx = $state<number | null>(null);
+  // A lista se reordena durante o arrasto; cancelado (Esc, soltar fora) ele volta a como estava.
+  let beforeDrag: { lista: Shortcut[]; sujo: boolean } | null = null;
   function dragStart(e: DragEvent, i: number) {
     dragIdx = i;
+    beforeDrag = { lista, sujo };
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', String(i));
@@ -118,7 +127,14 @@
     dragIdx = i;
     sujo = true;
   }
-  function dragEnd() { dragIdx = null; }
+  function dragEnd(e: DragEvent) {
+    if (e.dataTransfer?.dropEffect === 'none' && beforeDrag) {
+      lista = beforeDrag.lista;
+      sujo = beforeDrag.sujo;
+    }
+    beforeDrag = null;
+    dragIdx = null;
+  }
   function remover(i: number) {
     lista = lista.filter((_, k) => k !== i);
     sujo = true;

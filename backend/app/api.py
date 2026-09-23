@@ -6170,17 +6170,23 @@ def runner_pane(name: str):
 def shortcut_shell(name: str, body: ShortcutShellBody):
     # Atalho "abrir programa" da fileira: dispara-e-esquece no cwd da sessao. Sem pane, sem
     # captura de saida — comando cuja saida interessa tem casa melhor (o run ou o terminal).
-    # start_new_session desprende o filho: matar/reiniciar o backend nao leva o programa junto.
+    # Filho desprendido pra matar/reiniciar o backend nao levar o programa junto. start_new_session
+    # so existe no POSIX (no Windows e ignorado calado); la vale grupo proprio e sem console,
+    # em valor literal porque subprocess.CREATE_* so existe no Windows.
     cwd = _session_cwd(name)
     comando = body.command.strip()
     if not comando:
         raise HTTPException(400, detail=erro("erro_shortcut_vazio", "comando vazio"))
+    detach = ({"creationflags": 0x00000200 | 0x08000000} if os.name == "nt"
+              else {"start_new_session": True})
     try:
-        subprocess.Popen(comando, shell=True, cwd=cwd, start_new_session=True,
-                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(comando, shell=True, cwd=cwd,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, **detach)
     except OSError as e:
         raise HTTPException(500, detail=erro("erro_shortcut_shell", str(e)))
+    # Sem o texto do comando: ele pode carregar credencial.
+    _log.info("shortcut-shell: sessao=%s pid=%s", name, proc.pid)
     return {"ok": True}
 
 

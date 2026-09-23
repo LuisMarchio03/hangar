@@ -570,14 +570,15 @@ class RunBody(BaseModel):
     command: str
 
 
+# Tetos só pra um corpo gigante ser recusado antes de parseado inteiro — bem acima do uso real.
 class CustomRunner(BaseModel):
-    label: str
-    command: str
+    label: str = Field(max_length=200)
+    command: str = Field(max_length=200_000)
 
 
 class CustomRunnersBody(BaseModel):
-    commands: list[CustomRunner]
+    commands: list[CustomRunner] = Field(max_length=500)
 
 
 class ShortcutShellBody(BaseModel):
-    command: str
+    command: str = Field(max_length=200_000)
