@@ -6,6 +6,8 @@ Padrão da casa (precedente: engine_probe._buscar): toda chamada externa vive nu
 função privada de I/O trocada no teste (`_bater`, `_detectar_lan`, `_nome_tailscale`).
 Nenhum teste toca rede nem processo real.
 """
+import threading
+
 import pytest
 
 from app import alcance
@@ -95,9 +97,13 @@ def test_bind_nao_loopback_nao_tem_linha_nesta_maquina(monkeypatch):
 
 def test_sem_public_url_e_sem_tailscale_volta_nao_configurado_sem_probar(monkeypatch):
     chamadas = []
+    trava = threading.Lock()
 
     def registra(url):
-        chamadas.append(url)
+        # As candidatas de uma linha são testadas em PARALELO: sem a trava a lista espiã perde
+        # registro, e a ordem nunca seria estável (por isso a asserção é por conjunto).
+        with trava:
+            chamadas.append(url)
         return 1.0
 
     monkeypatch.setattr(alcance, "_bater", registra)
@@ -112,8 +118,9 @@ def test_sem_public_url_e_sem_tailscale_volta_nao_configurado_sem_probar(monkeyp
         "tempo_ms": None,
         "motivo": "",
     }
-    # Só o rede_local foi testado: o público vazio NUNCA é probado.
-    assert chamadas == ["http://192.168.0.42:5173"]
+    # Só o rede_local foi testado — e nas DUAS portas que podem servir a interface (a do front e a
+    # do serviço, que serve o dist). O público vazio NUNCA é probado.
+    assert set(chamadas) == {"http://192.168.0.42:5173", "http://192.168.0.42:8765"}
 
 
 def test_public_url_entra_e_e_testada(monkeypatch):

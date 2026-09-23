@@ -2,7 +2,6 @@
 (transcript.py/state.py/terminal_input.py). ZERO logica nova de Claude — so delegacao; o
 comportamento de hoje (tmux, --session-id, hooks) fica intocado."""
 import asyncio
-import re
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
@@ -15,7 +14,6 @@ from app import terminal_input as ti
 
 # Mesma regex de app.registry.sanitize_cwd. Duplicada (nao importada) pra nao criar ciclo
 # adapters.claude -> registry -> adapters (registry importa get_adapter em create()).
-_SANITIZE_RE = re.compile(r"[^A-Za-z0-9]")
 
 
 class ClaudeAdapter:
@@ -49,4 +47,5 @@ class ClaudeAdapter:
         return argv + model_args.args_de("claude", model, effort, permission_mode)
 
     def transcript_path(self, cwd: str, session_id: str) -> str:
-        return str(Path(settings.projects_dir) / _SANITIZE_RE.sub("-", cwd) / f"{session_id}.jsonl")
+        from app.registry import sanitize_cwd   # local: registry importa os adapters
+        return str(Path(settings.projects_dir) / sanitize_cwd(cwd) / f"{session_id}.jsonl")

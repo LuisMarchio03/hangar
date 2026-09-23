@@ -1,31 +1,54 @@
 import { describe, it, expect } from 'vitest';
-import { precisaPreencher, mostrarIrPraoFim, nextAtBottom } from './window';
+import { precisaPreencher, mostrarIrPraoFim, nextAtBottom, renovarGesto } from './window';
 
 describe('nextAtBottom', () => {
   it('subir 20px durante o streaming solta do fim, mesmo dentro da folga de 64px', () => {
     // O bug: gap=20 < 64 mantinha a lista colada e o próximo pedaço da prévia puxava de volta.
-    expect(nextAtBottom(980, 1000, 20)).toBe(false);
+    expect(nextAtBottom(true, 980, 1000, 20, true)).toBe(false);
   });
 
   it('o primeiro passo de uma rolagem suave, 2px pra cima colada no fim, já solta', () => {
-    expect(nextAtBottom(998, 1000, 2)).toBe(false);
+    expect(nextAtBottom(true, 998, 1000, 2, true)).toBe(false);
   });
 
   it('conteúdo encolheu com a lista colada: scrollTop cai mas a folga segue ~0, continua colada', () => {
-    expect(nextAtBottom(700, 1000, 0.5)).toBe(true);   // meio pixel do arredondamento
-    expect(nextAtBottom(700, 1000, 0)).toBe(true);
+    expect(nextAtBottom(true, 700, 1000, 0.5, true)).toBe(true);   // meio pixel do arredondamento
+    expect(nextAtBottom(true, 700, 1000, 0, true)).toBe(true);
   });
 
-  it('longe do fim nunca é "no fim", subindo, descendo ou sem ter se mexido', () => {
-    // O terceiro caso é o da MessageList.ancora: a lista aparece a 3500px do fim sem evento de
-    // subida antes. Uma regra que só soltasse ao SUBIR deixava a janela seguir a cauda ali.
-    expect(nextAtBottom(900, 1000, 300)).toBe(false);
-    expect(nextAtBottom(500, 400, 600)).toBe(false);
-    expect(nextAtBottom(1000, 0, 3500)).toBe(false);
+  it('a resposta crescendo abre a folga sozinha e a lista CONTINUA acompanhando', () => {
+    // Sem gesto da pessoa não há o que soltar: um resultado de ferramenta longo passa de 64px
+    // entre dois quadros, e soltar ali parava o chat no meio da resposta de quem estava no fim.
+    expect(nextAtBottom(true, 1000, 1000, 300, false)).toBe(true);
+    expect(nextAtBottom(true, 1000, 0, 3500, false)).toBe(true);
+  });
+
+  it('longe do fim, o gesto da pessoa solta em qualquer direção', () => {
+    expect(nextAtBottom(true, 900, 1000, 300, true)).toBe(false);
+    expect(nextAtBottom(true, 500, 400, 600, true)).toBe(false);
+  });
+
+  it('solta continua solta enquanto ninguém desce de volta', () => {
+    expect(nextAtBottom(false, 1000, 1000, 300, false)).toBe(false);
   });
 
   it('descer até 64px do fim reencosta', () => {
-    expect(nextAtBottom(990, 900, 40)).toBe(true);
+    expect(nextAtBottom(false, 990, 900, 40, true)).toBe(true);
+  });
+});
+
+describe('renovarGesto', () => {
+  it('arraste que continua dentro da janela estica a janela', () => {
+    // 1000 = toque; cada evento de scroll seguinte renova, então um arraste de barra que dura
+    // segundos nunca deixa de ser gesto.
+    expect(renovarGesto(1200, 1400)).toBe(1600);
+    expect(renovarGesto(1550, 1600)).toBe(1950);
+  });
+
+  it('parou: depois da janela vencida nada renova', () => {
+    // É o que impede o crescimento da resposta de se passar por gesto.
+    expect(renovarGesto(2000, 1400)).toBe(1400);
+    expect(renovarGesto(1400, 1400)).toBe(1400);
   });
 });
 

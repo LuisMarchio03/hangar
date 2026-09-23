@@ -1108,6 +1108,52 @@ def test_follow_reemite_entrega_e_reversao_sem_reemitir_confirmada(monkeypatch, 
     assert q.load()[0]["confirmed"] is True
 
 
+def test_follow_skips_unchanged_file_and_detects_replacement(monkeypatch):
+    q = PromptQueue("metadata")
+    q.append("primeira")
+    load = q.load
+    reads = []
+
+    def tracked_load():
+        reads.append(True)
+        return load()
+
+    monkeypatch.setattr(q, "load", tracked_load)
+
+    async def changes(*args, **kwargs):
+        yield set()
+        yield set()
+        assert len(reads) == 1
+
+        previous = q.path.stat()
+        replacement = q.path.with_suffix(".replacement")
+        replacement.write_bytes(q.path.read_bytes())
+        os.utime(replacement, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+        replacement.replace(q.path)
+        yield set()
+        assert len(reads) == 2
+
+        os.utime(q.path, ns=(previous.st_atime_ns, previous.st_mtime_ns + 1_000_000_000))
+        yield set()
+        assert len(reads) == 3
+
+        q.clear()
+        yield set()
+        yield set()
+        assert len(reads) == 4
+
+        PromptQueue("metadata").append("segunda")
+        yield set()
+        assert len(reads) == 5
+
+    monkeypatch.setattr(pqueue, "awatch", changes)
+
+    async def collect():
+        return [event.text async for event in q.follow()]
+
+    assert asyncio.run(collect()) == ["primeira", "segunda"]
+
+
 def test_reconcile_resgata_desistida_que_apareceu_depois():
     # `desistiu` era irreversivel: a bolha ficava avisando "nao chegou" pra sempre sobre uma msg que
     # CHEGOU — so que depois do prazo. Medido em 13/08/2026 numa sessao Kimi: 6 de 7 desistidas

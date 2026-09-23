@@ -788,8 +788,44 @@ export function toolVerbo(nome: string | null | undefined): string {
     case 'editou': return m.tool_verbo_editou();
     case 'criou': return m.tool_verbo_criou();
     case 'rodou': return m.tool_verbo_rodou();
-    default: return nome ?? m.formato_tool_generico();
+    default: return nomeFerramenta(nome);
   }
+}
+
+/** `mcp__hangar-computer-control__objetivo` -> "computer-control · objetivo"; o resto fica como veio. */
+export function nomeFerramenta(nome: string | null | undefined): string {
+  if (!nome) return m.formato_tool_generico();
+  const partes = nome.split('__');
+  if (partes[0] !== 'mcp' || partes.length < 3) return nome;
+  return `${partes[1].replace(/^hangar-/, '')} · ${partes.slice(2).join('__')}`;
+}
+
+/** Quebra um comando de shell nos `;`, `&&`, `||` e quebras de linha de fora de aspas e parênteses,
+ *  só pra leitura: `&&`/`||` ficam no começo da parte, o `;` some. */
+export function separarComando(cmd: string): string[] {
+  const partes: string[] = [];
+  let atual = '';
+  let prof = 0;
+  let aspas: string | null = null;
+  const fechar = () => { const p = atual.trim(); if (p) partes.push(p); atual = ''; };
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i];
+    if (aspas) {
+      atual += c;
+      if (c === '\\' && aspas === '"') atual += cmd[++i] ?? '';
+      else if (c === aspas) aspas = null;
+      continue;
+    }
+    if (c === '\\') { atual += c + (cmd[++i] ?? ''); continue; }
+    if (c === "'" || c === '"' || c === '`') { aspas = c; atual += c; continue; }
+    if (c === '(' || c === '{') prof++;
+    else if ((c === ')' || c === '}') && prof > 0) prof--;
+    if (prof === 0 && (c === ';' || c === '\n')) { fechar(); continue; }
+    if (prof === 0 && (c === '&' || c === '|') && cmd[i + 1] === c) { fechar(); atual = c + c; i++; continue; }
+    atual += c;
+  }
+  fechar();
+  return partes;
 }
 
 // Título de um grupo de chamadas. O transcript não tem título de grupo: o `description` que o modelo

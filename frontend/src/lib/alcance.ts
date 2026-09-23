@@ -4,7 +4,7 @@
 // obrigatoriamente no ativo. lib/api.ts é fechado neste plano; este módulo nasce novo.
 
 import * as m from '../paraglide/messages';
-import { errorDetail } from '@hangar/core';
+import { errorDetail, probeServerResponse } from '@hangar/core';
 import type { Server } from './auth';
 
 // Os QUATRO estados nomeados da linha. O backend manda ok/falhou/nao_configurado; o
@@ -29,18 +29,7 @@ export interface AlcanceDoServidor {
 }
 
 export async function alcanceDoServidor(s: Server, init?: RequestInit): Promise<AlcanceDoServidor> {
-  const res = await fetch(`${s.baseUrl}/api/alcance`, {
-    // Prazo por PADRAO, mesmo do apiFetchForServer: servidor atras de VPN nao recusa a
-    // conexao, o socket pendura e a promessa nunca resolve — sem prazo a tela ficaria
-    // em "Testando…" para sempre, sem erro nenhum.
-    signal: AbortSignal.timeout(8000),
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${s.token}`,
-      ...(init?.headers ?? {}),
-    },
-  });
+  const res = await probeServerResponse(s, '/api/alcance', init);
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
   return res.json() as Promise<AlcanceDoServidor>;
 }
@@ -55,13 +44,7 @@ export interface PareamentoDoServidor {
 }
 
 export async function pareamentoDoServidor(s: Server, endereco: TipoEndereco): Promise<PareamentoDoServidor> {
-  const res = await fetch(`${s.baseUrl}/api/alcance/pareamento?endereco=${encodeURIComponent(endereco)}`, {
-    signal: AbortSignal.timeout(8000),
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${s.token}`,
-    },
-  });
+  const res = await probeServerResponse(s, `/api/alcance/pareamento?endereco=${encodeURIComponent(endereco)}`);
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
   return res.json() as Promise<PareamentoDoServidor>;
 }
@@ -69,10 +52,16 @@ export async function pareamentoDoServidor(s: Server, endereco: TipoEndereco): P
 // Frase de estado POR LINHA, derivada dos mocks (estados 1 e 3): o ok varia conforme o
 // tipo (wifi / 4G / nesta máquina), falhou e testando são fixos, "não configurado" é
 // neutro de propósito — não estar configurado não é defeito.
-export function fraseDeEstado(e: EnderecoAlcance): string {
+export function fraseDeEstado(e: EnderecoAlcance, bindLoopback = ''): string {
   if (e.estado === 'nao_configurado') return m.acesso_publico_sem_valor();
   if (e.estado === 'testando') return m.acesso_testando();
-  if (e.estado === 'falhou') return m.acesso_falhou_endereco();
+  // Endereço da LAN fechado com o bind em loopback não é defeito, é consequência da escolha da
+  // máquina: dizer "não está escutando neste endereço" manda procurar um problema que não existe.
+  if (e.estado === 'falhou') {
+    return e.tipo === 'rede_local' && bindLoopback
+      ? m.acesso_fechado_loopback({ endereco: bindLoopback })
+      : m.acesso_falhou_endereco();
+  }
   const tempo = `${e.tempo_ms ?? 0} ms`;
   switch (e.tipo) {
     case 'rede_local':

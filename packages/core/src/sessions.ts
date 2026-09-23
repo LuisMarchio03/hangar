@@ -50,7 +50,7 @@ export function aggregateSessions(
       error: slot?.error ?? null,
       loaded: slot?.sessions != null,
     };
-    if (slot?.sessions) {
+    if (slot?.sessions && slot.error !== 'offline') {
       const color = serverColor(srv.id);
       let cache = _rowCache.get(slot.sessions);
       if (!cache || cache.label !== srv.label || cache.color !== color) {

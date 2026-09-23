@@ -30,8 +30,13 @@
     onCriada: () => void;
     // Só repassada ao formulário do modelo, que recusa nome curto já ocupado antes de gravar.
     nomesExistentes?: string[];
+    // Nome da conta-base do app quando ela está deslogada. Com ela assim, conta Claude nova não
+    // cria pasta: a base é a que o `claude` do terminal usa, então o login vai pra ela.
+    baseDeslogada?: string | null;
+    onEntrarBase?: () => void;
   }
-  let { apiTarget, onFechar, onCriada, nomesExistentes = [] }: Props = $props();
+  let { apiTarget, onFechar, onCriada, nomesExistentes = [], baseDeslogada = null,
+        onEntrarBase }: Props = $props();
   const codexServer = $derived(apiTarget ?? listServers().find((s) => s.id === getActiveId()) ?? null);
 
   // Catálogo. `url` vazia = o usuário digita (provedor personalizado); `login` = conta do Claude por
@@ -268,6 +273,13 @@
       {#if codexServer}
         <CodexContaLogin server={codexServer} oncomplete={onCriada} />
       {:else}<p class="nc-erro" role="alert">{m.falha_conexao()}</p>{/if}
+    {:else if escolhido.login === 'claude' && baseDeslogada && onEntrarBase}
+      <p class="nc-leg">{m.novacred_base_deslogada({ nome: baseDeslogada })}</p>
+      <div class="nc-rodape">
+        <button type="button" class="nc-btn primario" onclick={onEntrarBase}
+          >{m.novacred_entrar_base({ nome: baseDeslogada })}</button>
+        <button type="button" class="nc-btn" onclick={onFechar}>{m.comum_cancelar()}</button>
+      </div>
     {:else}
       <p class="nc-leg">{escolhido.desc}</p>
 

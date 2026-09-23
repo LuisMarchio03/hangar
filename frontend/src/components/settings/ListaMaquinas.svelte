@@ -11,15 +11,20 @@
     meuIdentificador: string;
     carregando: boolean;
     corrige: { id: string; url: string } | null;
+    // Gravação do identificador remoto: qual Server.id está em voo ('' = nenhum) e o erro POR
+    // servidor. O detalhe recebe só a fatia dele — ele desenha uma máquina, não a lista.
+    idSalvando: string;
+    idErro: Record<string, string>;
     onAcompanhar: (linha: LinhaMaquina, ligar: boolean) => void;
     onFalar: (linha: LinhaMaquina, ligar: boolean) => void;
     onEditar: (linha: LinhaMaquina) => void;
     onCorrige: (url: string | null) => void;
     onTestarDeNovo: (linha: LinhaMaquina) => void;
     onRemover: (linha: LinhaMaquina) => void;
+    onSalvarIdentificador: (linha: LinhaMaquina, valor: string) => void;
   }
 
-  let { linhas, estados, meuIdentificador, carregando, corrige, onAcompanhar, onFalar, onEditar, onCorrige, onTestarDeNovo, onRemover }: Props = $props();
+  let { linhas, estados, meuIdentificador, carregando, corrige, idSalvando, idErro, onAcompanhar, onFalar, onEditar, onCorrige, onTestarDeNovo, onRemover, onSalvarIdentificador }: Props = $props();
 
   // Pela chave, não pelo objeto: a linha é recriada a cada carga, e o detalhe tem de acompanhar o
   // dado novo. Linha que sumiu (removida) fecha o detalhe sozinha. Editar fecha antes de abrir a
@@ -32,9 +37,13 @@
   function curto(l: LinhaMaquina, e: EstadoDaLinha): string {
     switch (e.tipo) {
       case 'desligada': return m.servidores_curto_desligado();
-      case 'sem_identificador': return m.servidores_curto_nao_responde();
+      case 'sem_identificador': return m.servidores_curto_sem_id();
+      case 'nao_responde': return m.servidores_curto_nao_responde();
+      case 'token_aparelho_recusado': return m.servidores_curto_token_recusado();
       case 'testando': return m.acesso_testando();
       case 'token_recusado': return m.servidores_curto_token_recusado();
+      case 'ida_outra_maquina':
+      case 'volta_outra_maquina': return m.servidores_curto_endereco_outra();
       case 'parcial': return e.ida?.estado === 'ok' ? m.servidores_curto_so_ida() : m.servidores_curto_ida_falhou();
       case 'volta_sem_medir': return m.servidores_curto_falta_token();
       case 'volta_sem_registro': return m.servidores_curto_so_ida();
@@ -48,7 +57,8 @@
       }
     }
   }
-  const aviso = (e: EstadoDaLinha) => ['token_recusado', 'parcial', 'sem_identificador', 'volta_sem_registro', 'volta_sem_medir'].includes(e.tipo);
+  const aviso = (e: EstadoDaLinha) => ['token_recusado', 'token_aparelho_recusado', 'parcial', 'sem_identificador',
+    'nao_responde', 'ida_outra_maquina', 'volta_outra_maquina', 'volta_sem_registro', 'volta_sem_medir'].includes(e.tipo);
 </script>
 
 <ul class="mq-lista">
@@ -75,7 +85,9 @@
 
 {#if linhaAberta}
   <DetalheServidor linha={linhaAberta} estado={estadoDe(linhaAberta)} {meuIdentificador} {corrige}
-    {onAcompanhar} {onFalar} {onCorrige} {onTestarDeNovo} {onRemover}
+    idSalvando={!!linhaAberta.navegador && idSalvando === linhaAberta.navegador.id}
+    idErro={idErro[linhaAberta.navegador?.id ?? ''] ?? ''}
+    {onAcompanhar} {onFalar} {onCorrige} {onTestarDeNovo} {onRemover} {onSalvarIdentificador}
     onEditar={(l) => { aberta = null; onEditar(l); }}
     onFechar={() => (aberta = null)} />
 {/if}

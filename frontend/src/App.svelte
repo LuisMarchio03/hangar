@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { isAuthenticated, setServers, listServers, mergeServers, onServersChanged, clearCredentials, selectServer, getActiveId, serverIdentidade, type Server } from './lib/auth';
   import { logoutLocal } from './lib/logout';
   import { getVault, decryptList, encryptList, putVault, logout as syncLogout, syncStatus, cachedSyncStatus, isSyncUnauthorized, stashKey, loadKey, clearKey } from './lib/sync';
@@ -28,6 +29,8 @@
   import CodeOverlay from './components/CodeOverlay.svelte';
   import GrupoDropDialog from './components/GrupoDropDialog.svelte';
   import { iniciarCodeActions } from './lib/codeActions.svelte';
+  import { navegadorNativo } from './lib/navegadorNativo';
+  import { sessionsStore } from './lib/sessionsStore.svelte';
 
   // Deep-link do push (feature #5): a notif abre '/?server=<id>&session=<name>' — o router so olha
   // window.location.hash, entao sem isto os query params eram ignorados e sempre caia na lista.
@@ -151,6 +154,14 @@
         ? (syncReady ? parseHash(currentHash) : { name: 'login' })     // sync: exige sessao com chave
         : (authenticated ? parseHash(currentHash) : { name: 'login' }) // sem sync: regra antiga
   );
+
+  // Pedidos de navegador precisam chegar mesmo sem sidebar ou com outra conversa na tela.
+  const keepPreviewConnected = $derived(route.name !== 'loading' && route.name !== 'login' && !!navegadorNativo());
+  $effect(() => {
+    if (!keepPreviewConnected) return;
+    untrack(() => sessionsStore.retain());
+    return () => sessionsStore.release();
+  });
 
   // "Onde o app foi usado": uma linha por tela que entra à vista. É o que responde qual parte do
   // app é realmente usada — e, num defeito, de onde a pessoa vinha.
@@ -531,7 +542,7 @@
     <Uso onBack={voltarDoRelatorio} />
   {:else if route.name === 'archive'}
     <!-- Remonta ao trocar de deep-link (busca -> outra conversa): reabre com o novo alvo. -->
-    {#key route.deepLink ? `${route.deepLink.serverId}/${route.deepLink.project}/${route.deepLink.sessionId}` : ''}
+    {#key route.deepLink ? `${route.deepLink.serverId}/${route.deepLink.project}/${route.deepLink.sessionId}/${route.deepLink.eventId ?? ''}` : ''}
       <Archive onBack={() => navigateTo('#/')} deepLink={route.deepLink ?? null} />
     {/key}
   {:else if route.name === 'compare'}

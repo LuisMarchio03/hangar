@@ -16,7 +16,7 @@ from watchfiles import awatch
 from app import atomico
 from app.config import settings
 from app.models import ChatEvent, dumps_safe, scrub_surrogates
-from app.transcript import parse_obj
+from app.transcript import RewriteFilter, parse_obj
 
 _log = logging.getLogger("hangar.pqueue")
 
@@ -921,8 +921,18 @@ class PromptQueue:
         seen: dict[str, tuple[bool | None, bool | None, bool]] = {}
         inicio: float = time.time()
         primeira: bool = True
+        last_marker = object()
 
         def emit_new() -> list[ChatEvent]:
+            nonlocal last_marker
+            try:
+                stat = self.path.stat()
+            except FileNotFoundError:
+                marker = None
+            else:
+                marker = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+            if marker == last_marker:
+                return []
             evs = []
             for entry in self.load():
                 eid = str(entry.get("id"))
@@ -948,6 +958,8 @@ class PromptQueue:
                 if min_ts and not _da_sessao_atual(entry, min_ts):
                     continue
                 evs.append(event)
+            # O marcador anterior à leitura evita perder uma gravação concorrente.
+            last_marker = marker
             return evs
 
         # emit_new() faz read_text do sidecar -> roda no threadpool pra nao bloquear o loop. As chamadas
@@ -1045,6 +1057,8 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
             return  # sessao nova: jsonl ainda nao existe -> historico vazio (limpo), nao 500
         stream = _pi_stream() if _pi_stream else None
         parse = stream.feed_events if stream else _parse
+        # Reescrita do `--resume` (ver transcript.RewriteFilter): so o Claude regrava o jsonl.
+        reescrita = RewriteFilter() if provider == "claude" else None
 
         barrados: set[str] = set()
 
@@ -1073,6 +1087,8 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
                 try:
                     obj = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
+                    continue
+                if reescrita is not None and not reescrita.keep(obj):
                     continue
                 evs = parse(obj)
                 # ts ANTES do `continue`: com o parser do Pi a 1a linha util e um user_msg que fica

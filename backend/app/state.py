@@ -337,6 +337,50 @@ def menu_codex(pane_text: str) -> Optional[tuple[Optional[str], list[str]]]:
     return pergunta, opcoes
 
 
+# Diálogo do Claude Code desenhado com `hideIndexes` (confiança da pasta, "Make auto mode your
+# default permission mode?"): as opções vêm sem número e o `_CURSOR_RE` não o enxerga. Sem isto a
+# sessão parecia ociosa e o envio digitava em cima da pergunta.
+_CURSOR_SEM_NUMERO_RE = re.compile(r"^(\s*❯\s+)\S")
+
+
+def _menu_sem_numero(lines: list[str]) -> Optional[tuple[Optional[str], list[str], int]]:
+    """(pergunta, opcoes, posicao do cursor 1-based) do diálogo sem numeração, ou None.
+
+    Só é menu vivo sem régua ABAIXO do cursor: o `❯ ` do composer mora sempre entre duas réguas,
+    e uma citação no scrollback tem o composer embaixo dela. As opções são as linhas contíguas
+    que começam na coluna do rótulo do cursor."""
+    cursor = None
+    for i, ln in enumerate(lines):
+        if _CURSOR_SEM_NUMERO_RE.match(ln) and not _CURSOR_RE.match(ln):
+            cursor = i
+    if cursor is None or any(_RULE_RE.match(ln) for ln in lines[cursor + 1:]):
+        return None
+    col = _CURSOR_SEM_NUMERO_RE.match(lines[cursor]).end(1)
+
+    def na_coluna(ln: str) -> bool:
+        return len(ln) > col and not ln[:col].strip() and ln[col] != " "
+
+    top = cursor
+    while top > 0 and na_coluna(lines[top - 1]):
+        top -= 1
+    bot = cursor + 1
+    while bot < len(lines) and na_coluna(lines[bot]):
+        bot += 1
+    options = [lines[i][col:].strip() for i in range(top, bot)]
+    if len(options) < 2:
+        return None
+    # A pergunta é o título: primeira linha com texto depois da régua que abre o diálogo.
+    inicio = max((i for i in range(top) if _RULE_RE.match(lines[i])), default=-1) + 1
+    question = next((ln.strip() for ln in lines[inicio:top] if ln.strip()), None)
+    return question, options, cursor - top + 1
+
+
+def cursor_sem_numero(pane_text: str) -> Optional[int]:
+    """Opção (1-based) sob o cursor do diálogo sem numeração, ou None sem diálogo na tela."""
+    menu = _menu_sem_numero(pane_text.splitlines())
+    return menu[2] if menu else None
+
+
 def classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optional[list[str]]]:
     """Return (state, label, question, options).
 
@@ -363,6 +407,10 @@ def classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optiona
         # montado em cima de texto que apenas PARECE lista — o rascunho no composer e o caso vivo.
         if len(options) >= 2:
             return ("awaiting_input", None, _question(region), options)
+    else:
+        sem_numero = _menu_sem_numero(lines)
+        if sem_numero is not None:
+            return ("awaiting_input", None, sem_numero[0], sem_numero[1])
 
     spinner = _live_spinner(pane_text)
     if spinner is not None:

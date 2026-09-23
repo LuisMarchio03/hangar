@@ -3,6 +3,9 @@
 A miniatura de 96px carrega o arquivo ORIGINAL, entao sem cache toda repintura da lista rebaixava o
 PNG inteiro. Aqui vale o par: `cache-control` pra nao perguntar por 60s, e 304 pra quando perguntar.
 """
+import base64
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -84,7 +87,9 @@ def test_arquivo_reescrito_invalida_o_etag(cliente, sessao, monkeypatch):
 
     r = _pegar(cliente, "mock.html", headers={"If-None-Match": etag_velho})
     assert r.status_code == 200
-    assert r.content == b"<p>dois</p>"
+    source = re.search(r'src="data:text/html;charset=utf-8;base64,([^\"]+)"', r.text)
+    assert source is not None
+    assert base64.b64decode(source[1]) == b"<p>dois</p>"
 
 
 def test_304_nao_fura_a_trava_do_transcript(cliente, sessao, monkeypatch):
@@ -95,3 +100,39 @@ def test_304_nao_fura_a_trava_do_transcript(cliente, sessao, monkeypatch):
 
     r = _pegar(cliente, "segredo.png", headers={"If-None-Match": '"qualquer"'})
     assert r.status_code == 403
+
+
+@pytest.mark.parametrize("upload", [False, True])
+def test_html_runs_only_inside_an_isolated_document(cliente, sessao, monkeypatch, upload):
+    _citado(monkeypatch)
+    path = sessao / "document.html"
+    content = b'<button onclick="this.textContent=42">Run</button>' + b" " * 100_000
+    content += b'</iframe><script>window.parent.localStorage.getItem("cp_servers")</script>'
+    path.write_bytes(content)
+    monkeypatch.setattr(api, "resolve_upload", lambda *args: path)
+    route = "/api/sessions/s1/uploads/document.html" if upload else "/api/sessions/s1/file"
+    stat = path.stat()
+    response = cliente.get(route, params={"path": str(path), "token": "secret"}, headers={
+        "If-None-Match": f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"',
+    })
+
+    assert response.status_code == 200
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert 'sandbox="allow-scripts allow-popups"' in response.text
+    assert 'referrerpolicy="no-referrer"' in response.text
+    assert '<meta name="viewport"' in response.text
+    assert "<script>" not in response.text
+    source = re.search(r'src="data:text/html;charset=utf-8;base64,([^\"]+)"', response.text)
+    assert source is not None
+    assert base64.b64decode(source[1], validate=True) == content
+
+
+def test_svg_stays_an_image_without_document_scripts(cliente, sessao, monkeypatch):
+    _citado(monkeypatch)
+    content = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+    (sessao / "image.svg").write_bytes(content)
+    response = _pegar(cliente, "image.svg")
+    assert response.content == content
+    assert response.headers["content-type"] == "image/svg+xml"
+    assert response.headers["content-security-policy"] == "sandbox; script-src 'none'"

@@ -17,7 +17,7 @@ from app import plugin_bridge
 from app import tmux
 from app.models import scrub_surrogates
 from app.pqueue import PromptQueue, _transcript_start_ts
-from app.state import (_live_spinner, classify, is_overlay, menu_codex, omp_box,
+from app.state import (_live_spinner, classify, cursor_sem_numero, is_overlay, menu_codex, omp_box,
                        aprovacao_kimi_no_pane)
 from app.tmux import send_keys
 
@@ -1963,6 +1963,11 @@ class TerminalInput:
             antes = depois   # a tela ja foi relida ali; nao gasta outra captura
 
         row = _cursor_row(antes)
+        ler = _cursor_row
+        if row is None and (sem_numero := cursor_sem_numero(antes)) is not None:
+            # Diálogo sem número (confiança da pasta, auto mode): a posição vem da ordem das linhas,
+            # e a conferência é a mesma do menu numerado — ali a escolha é "confiar" ou "sair".
+            row, ler = sem_numero, cursor_sem_numero
         if row is None:
             for _ in range(option - 1):
                 send_keys(name, "Down")
@@ -1980,7 +1985,7 @@ class TerminalInput:
                 for _ in range(abs(option - row)):
                     send_keys(name, "Down" if option > row else "Up")
                     time.sleep(_NAV_GAP)
-                row = _cursor_row(tela())
+                row = ler(tela())
             if row != option:
                 raise DriveError(f"cursor parou na linha {row}, esperava {option} — opcao NAO enviada")
         send_keys(name, "Enter")

@@ -46,6 +46,14 @@ def test_sanitize_cwd_matches_claude_scheme():
         "-home-jeffer1312-Projetos-hangar"
 
 
+def test_sanitize_cwd_ignora_separador_final():
+    assert sanitize_cwd("/home/jefferson/") == "-home-jefferson"
+    assert sanitize_cwd("C:\\Users\\x\\") == sanitize_cwd("C:\\Users\\x") == "C--Users-x"
+    assert sanitize_cwd("C:/Users/x/") == "C--Users-x"
+    assert sanitize_cwd("/") == "-"
+    assert sanitize_cwd("C:\\") == "C--"
+
+
 # --- cmdline --session-id parsing (sinal DETERMINISTICO, funciona em idle) ---
 
 def test_session_id_from_cmdline_flag():

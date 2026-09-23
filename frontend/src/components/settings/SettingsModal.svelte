@@ -12,6 +12,7 @@
   import ContasSettings from './ContasSettings.svelte';
   import HarnessSettings from './HarnessSettings.svelte';
   import SyncSettings from './SyncSettings.svelte';
+  import ComputerControlSettings from './ComputerControlSettings.svelte';
   import ServidorSeletor from './ServidorSeletor.svelte';
   import ConfigIcone from './ConfigIcone.svelte';
   import BuscaConfig, { TITULO_TELA } from './BuscaConfig.svelte';
@@ -109,6 +110,7 @@
     { id: 'contas', secao: 'servidor', rotulo: m.contas_modelos_titulo(), icone: 'pessoa', servidor: true },
     { id: 'harnesses', secao: 'servidor', rotulo: m.harness_titulo(), icone: 'pulso', servidor: true },
     { id: 'voz', secao: 'servidor', rotulo: m.voz_titulo(), icone: 'mic', servidor: true },
+    { id: 'computer', secao: 'servidor', rotulo: m.computer_control_title(), icone: 'tela', servidor: true },
     { id: 'notificacoes', secao: 'servidor', rotulo: m.config_modal_notificacoes(), icone: 'sino', servidor: true },
     { id: 'anexos', secao: 'servidor', rotulo: m.config_modal_anexos_curto(), icone: 'clipe', servidor: true },
     { id: 'atalhos', secao: 'servidor', rotulo: m.lista_atalhos(), icone: 'raio', servidor: true },
@@ -396,6 +398,8 @@
     <VozSettings {store} />
   {:else if telaAtual === 'atalhos'}
     <AtalhosSettings apiTarget={alvo} />
+  {:else if telaAtual === 'computer'}
+    <ComputerControlSettings apiTarget={alvo} />
   {:else}
     <ServerSettings {store} secao={telaAtual} apiTarget={alvo} />
   {/if}

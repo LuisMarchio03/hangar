@@ -81,7 +81,7 @@ async def test_codex_auto_steer_preserva_uma_entrada_ate_completar(isolated, mon
 async def test_codex_sem_steer_preserva_composer(isolated, monkeypatch):
     adapter, rpc = attach(monkeypatch)
     result = await api.input_prompt("dest", api.InputBody(text="pedido normal"))
-    assert result == {"ok": True, "delivered": False, "steered": False}
+    assert result == {"ok": True, "delivered": False, "steered": False, "native": False}
     assert rpc.calls == []
     assert len(pqueue.PromptQueue("dest").load()) == 1
 
@@ -120,7 +120,7 @@ async def test_recados_concorrentes_confirmam_seus_proprios_ids(isolated, monkey
     results = await asyncio.wait_for(asyncio.gather(*[
         api.input_prompt("dest", api.InputBody(text=text, steer=True)) for text in ("A", "B")
     ]), 2)
-    assert results == [{"ok": True, "delivered": True, "steered": True}] * 2
+    assert results == [{"ok": True, "delivered": True, "steered": True, "native": False}] * 2
     assert sorted(params["input"][0]["text"] for method, params in rpc.calls if method == "turn/steer") == ["A", "B"]
 
 
@@ -145,7 +145,7 @@ async def test_orientacao_confirmada_sobrevive_a_falha_posterior_do_lote(isolate
     monkeypatch.setattr(rpc, "request", fail_second)
     monkeypatch.setattr(api, "_send_one_codex", manual_steer_wins)
     result = await api.input_prompt("dest", api.InputBody(text="A", steer=True))
-    assert result == {"ok": True, "delivered": True, "steered": True}
+    assert result == {"ok": True, "delivered": True, "steered": True, "native": False}
     assert [params["input"][0]["text"] for method, params in rpc.calls if method == "turn/steer"] == ["A"]
     reloaded = pqueue.PromptQueue("dest")
     assert [(row["text"], row["delivered"]) for row in reloaded.load()] == [("A", True), ("B", False)]
@@ -164,7 +164,7 @@ async def test_falha_ao_gravar_recibo_preserva_orientacao_aceita(isolated, monke
 
     monkeypatch.setattr(pqueue.PromptQueue, "set_delivered", fail_receipt)
     result = await api.input_prompt("dest", api.InputBody(text="A", steer=True))
-    assert result == {"ok": True, "delivered": True, "steered": True}
+    assert result == {"ok": True, "delivered": True, "steered": True, "native": False}
     assert len([method for method, _ in rpc.calls if method == "turn/steer"]) == 1
     assert pqueue.PromptQueue("dest").load()[0]["delivered"] is True
     assert "recibo indisponivel" in caplog.text
@@ -181,7 +181,7 @@ async def test_falha_ao_reler_recibo_preserva_orientacao_aceita(isolated, monkey
 
     monkeypatch.setattr(adapter, "steer_queue", fail_read_after_accept)
     result = await api.input_prompt("dest", api.InputBody(text="A", steer=True))
-    assert result == {"ok": True, "delivered": True, "steered": True}
+    assert result == {"ok": True, "delivered": True, "steered": True, "native": False}
     assert "recibo ilegivel" in caplog.text
 
 
@@ -267,7 +267,7 @@ async def test_kimi_sem_promocao_mantem_recado(isolated, monkeypatch, promoted):
 ])
 def test_cli_1a1_pede_steer_e_exibe_resultado(tmp_path, steered, delivered, expected):
     source = (Path(__file__).parents[2] / "scripts/hangar-send").read_text()
-    tail = source[source.index('text="[de: $sender] $*"'):]
+    tail = source[source.index('msg="$*"'):]
     program = '''set -e
 sender=origem
 target=dest
@@ -283,16 +283,21 @@ api() { printf '%s' "$3" > "$BODY_FILE"; printf '%s' "$RESPONSE"; }
     assert expected in result.stdout
 
 
-def test_cli_claude_nativo_continua_recusando_envio_por_input():
+def test_cli_claude_nativo_entrega_pelo_backend_sem_recusar(tmp_path):
+    # O transporte é do backend: com socket nativo dos dois lados o script segue mandando por
+    # /input e relata a entrega, nunca devolve o envio pro modelo fazer por outra ferramenta.
     source = (Path(__file__).parents[2] / "scripts/hangar-send").read_text()
     tail = source[source.index("forcar_tmux=0\n"):]
     program = '''set -e
 set -- destino recado
-api() { printf '%s' '{"uds":"/tmp/inbox"}'; }
+api() { printf '%s\\n' "$1 $2" "$3" > "$BODY_FILE"; printf '%s' '{"ok": true, "delivered": true, "steered": true, "native": true}'; }
 me() { echo origem; }
 ''' + tail
-    result = subprocess.run(["bash", "-c", program], env={**os.environ,
-        "CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/origem"}, capture_output=True, text=True)
-    assert result.returncode == 3
-    assert "SendMessage" in result.stderr
-    assert "entregue" not in result.stdout
+    body_file = tmp_path / "body.txt"
+    result = subprocess.run(["bash", "-c", program], env={**os.environ, "BODY_FILE": str(body_file)},
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    chamada, corpo = body_file.read_text().splitlines()
+    assert chamada == "POST /api/sessions/destino/input"
+    assert json.loads(corpo) == {"text": "[de: origem] recado", "steer": True}
+    assert "entregue agora -> destino (no socket do Claude dele" in result.stdout

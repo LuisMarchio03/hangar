@@ -118,11 +118,11 @@ def test_join_write_failure_restores_previous_state(monkeypatch):
     orig = PairLink.set
     armed = {"fail": True}
 
-    def flaky(self, peers, task="", gid=""):
+    def flaky(self, peers, task="", gid="", harness=None):
         if armed["fail"]:
             armed["fail"] = False  # falha UMA vez (o restore usa set também)
             raise OSError("disco cheio")
-        orig(self, peers, task, gid)
+        orig(self, peers, task, gid, harness)
 
     monkeypatch.setattr(PairLink, "set", flaky)
     with pytest.raises(OSError):

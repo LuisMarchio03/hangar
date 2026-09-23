@@ -6,10 +6,17 @@ import type { Server } from './auth';
 import type { PeerView } from './peers';
 import type { LadoState } from './registrarPeerDoisLados';
 
+// Por que o identificador do servidor não chegou. Sem isto "não responde" e "responde, mas está
+// sem nome" viravam a MESMA frase, e as duas se consertam de jeito diferente: uma é a máquina
+// fora do ar, a outra é um campo para preencher.
+export type MotivoSemId = 'vazio' | 'sem_resposta' | 'token';
+
 export interface LinhaMaquina {
   chave: string;
   nome: string;
   identificador: string | null;
+  // Só vale quando há `navegador` e falta `identificador`. Ausente = não se perguntou.
+  motivoId?: MotivoSemId;
   navegador: Server | null;
   peer: PeerView | null;
   estaMaquina: boolean;
@@ -20,6 +27,7 @@ export function unirMaquinas(
   ids: Record<string, string | null>,
   peers: PeerView[],
   escolhidoId: string | null,
+  motivos: Record<string, MotivoSemId> = {},
 ): LinhaMaquina[] {
   const porId = new Map(peers.map((p) => [p.id, p]));
   const porHost = new Map(peers.map((p) => [hostDe(p.base_url), p]));
@@ -41,6 +49,7 @@ export function unirMaquinas(
       chave: `srv:${s.id}`,
       nome: s.label,
       identificador,
+      motivoId: motivos[s.id] ?? 'vazio',
       navegador: s,
       peer,
       estaMaquina: s.id === escolhidoId,
@@ -56,7 +65,8 @@ export function unirMaquinas(
 export interface EstadoPeer { lados: LadoState[]; ok: boolean; testando?: boolean }
 
 export type TipoEstado =
-  | 'desligada' | 'sem_identificador' | 'testando' | 'token_recusado' | 'parcial'
+  | 'desligada' | 'sem_identificador' | 'nao_responde' | 'token_aparelho_recusado'
+  | 'testando' | 'token_recusado' | 'ida_outra_maquina' | 'volta_outra_maquina' | 'parcial'
   | 'volta_sem_medir' | 'volta_sem_registro' | 'ok' | 'neutro';
 
 export interface EstadoDaLinha {
@@ -67,6 +77,12 @@ export interface EstadoDaLinha {
 }
 
 const FALHA: LadoState['estado'][] = ['falhou', 'recusou', 'estranho'];
+
+const SEM_ID: Record<MotivoSemId, TipoEstado> = {
+  vazio: 'sem_identificador',
+  sem_resposta: 'nao_responde',
+  token: 'token_aparelho_recusado',
+};
 
 // Uma decisão só para a linha curta da lista e para o detalhe: se cada um derivasse o estado,
 // a lista podia dizer "Tudo certo" com o detalhe mostrando a volta falhando.
@@ -84,14 +100,22 @@ export function estadoDaLinha(linha: LinhaMaquina, st: EstadoPeer | undefined): 
   else farol = falhaReal ? 'nao' : 'test';       // nao_configurado não é falha
   let tipo: TipoEstado;
   if (desligada) tipo = 'desligada';
-  else if (linha.navegador && !linha.identificador) tipo = 'sem_identificador';
+  else if (linha.navegador && !linha.identificador) tipo = SEM_ID[linha.motivoId ?? 'vazio'];
   else if (st?.testando) tipo = 'testando';
   else if (volta?.estado === 'recusou' && volta.motivo === 'credencial') tipo = 'token_recusado';
+  // `estranho` é o endereço guardado respondendo como OUTRA máquina — o único modo de falha que
+  // se conserta trocando o endereço, e não esperando a máquina voltar. Vem antes do `parcial`,
+  // que é o balde genérico: senão ele o engole e a tela só diz "só de ida".
+  else if (volta?.estado === 'estranho') tipo = 'volta_outra_maquina';
+  else if (ida?.estado === 'estranho') tipo = 'ida_outra_maquina';
   else if (falhaReal) tipo = 'parcial';
   else if (volta?.estado === 'nao_configurado' && volta.motivo === 'token') tipo = 'volta_sem_medir';
   else if (volta?.estado === 'nao_configurado' && volta.motivo === 'registro') tipo = 'volta_sem_registro';
   else if (st?.ok) tipo = 'ok';
   else tipo = 'neutro';
+  // Máquina que este aparelho segue e não responde (ou recusa o token dele) é falha, não espera:
+  // sem `peer` não há medição nenhuma, e o farol neutro dizia "nada a relatar".
+  if (tipo === 'nao_responde' || tipo === 'token_aparelho_recusado') farol = 'nao';
   return { farol, tipo, ida, volta };
 }
 

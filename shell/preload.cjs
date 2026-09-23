@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld('hangar', {
   relaunch: () => ipcRenderer.invoke('hangar:relaunch'),
   // Abre o diálogo nativo de diretório; resolve com o caminho absoluto ou null (cancelado).
   pickFolder: () => ipcRenderer.invoke('hangar:pick-folder'),
+  // Reinicia o serviço pelo systemd, sem passar pelo próprio serviço — é a saída de quando ele
+  // travou e não atende mais o pedido que a tela faria por HTTP.
+  reiniciarServico: () => ipcRenderer.invoke('hangar:reiniciar-servico'),
   // Navegador embutido (WebContentsView no main), UM POR SESSÃO: a chave é serverId::nome.
   // hide (não close) na troca de sessão — o agente segue dirigindo o view escondido via CDP.
   // `bounds` vai por send, não invoke: dispara a cada frame de resize e não precisa de resposta.

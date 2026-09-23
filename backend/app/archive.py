@@ -297,7 +297,10 @@ def list_conversations(project: str, live_realpaths: set[str], cap: int = 100,
     # Ordenar ANTES do teto: a ordem que vem do disco e a do glob/indice, nao a de recencia, entao
     # cortar direto descartaria conversa NOVA e manteria velha -- calado, e justo na lista que diz
     # "mais recentes primeiro".
-    outras = sorted((c for c in (() if config_dir else _conversas_de_outros_providers())
+    # Pedido so de Claude nao paga a varredura dos rollouts de Codex/Pi/Kimi: o filtro logo abaixo
+    # descartaria tudo, mas a leitura ja teria acontecido (7x o tempo da listagem multi-conta).
+    outras = sorted((c for c in (() if config_dir or provider == "claude"
+                                 else _conversas_de_outros_providers())
                      if _projeto_de(c.cwd) == project
                      and (provider is None or c.provider == provider)),
                     key=lambda c: c.mtime, reverse=True)
@@ -403,6 +406,34 @@ def conta_de(project: str, session_id: str) -> Optional[str]:
         if (base / project / f"{session_id}.jsonl").is_file():
             return cfg
     raise FileNotFoundError(project)
+
+
+def move_conversation(project: str, session_id: str, config_dir: Optional[str]) -> bool:
+    """Leva a conversa pra conta `config_dir` (None = a do processo); False = ja estava la. E um
+    rename: `<uuid>.jsonl` mais a pasta irma `<uuid>/` (tool-results e subagentes), que um
+    `--resume` na conta destino le como se sempre tivesse sido dela. Nada fica na origem de
+    proposito: copia deixaria a mesma conversa listada duas vezes, e a que continua e so uma.
+
+    Conflito no destino (mesmo uuid ja la) e FileExistsError; fora isso, mesmos erros de conta_de."""
+    origem = conta_de(project, session_id)
+    if origem == config_dir:
+        return False
+    de = _base(origem) / project
+    para = _base(config_dir) / project
+    if (para / f"{session_id}.jsonl").exists() or (para / session_id).exists():
+        raise FileExistsError(session_id)
+    para.mkdir(parents=True, exist_ok=True)
+    os.replace(de / f"{session_id}.jsonl", para / f"{session_id}.jsonl")
+    irma = de / session_id
+    if irma.is_dir():
+        try:
+            os.replace(irma, para / session_id)
+        except OSError:
+            # Sem a pasta irma o jsonl na conta nova perde tool-results e subagentes: melhor a
+            # conversa inteira na origem do que metade em cada conta.
+            os.replace(para / f"{session_id}.jsonl", de / f"{session_id}.jsonl")
+            raise
+    return True
 
 
 def archive_cwd(project: str, session_id: str, config_dir: Optional[str] = None,

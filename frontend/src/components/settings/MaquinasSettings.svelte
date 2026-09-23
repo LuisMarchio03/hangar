@@ -4,11 +4,12 @@
   import { checkPeer, descobrirMaquinas, getIdentificador, setIdentificador, listarPeers, removerPeerDoisLados,
            type MaquinaDescoberta, type PeerView } from '../../lib/peers';
   import { registrarPeerDoisLados, type LadoState } from '../../lib/registrarPeerDoisLados';
-  import { unirMaquinas, type LinhaMaquina } from '../../lib/maquinas';
+  import { unirMaquinas, type LinhaMaquina, type MotivoSemId } from '../../lib/maquinas';
   import { sessionsStore } from '../../lib/sessionsStore.svelte';
   import ConfirmDialog from '../ConfirmDialog.svelte';
   import ModalDialog from '../ModalDialog.svelte';
   import { alcanceDoServidor, type AlcanceDoServidor, type TipoEndereco } from '../../lib/alcance';
+  import { reiniciarServidorEm } from '@hangar/core';
   import AdicionarMaquina from './AdicionarMaquina.svelte';
   import AcessoSettings from './AcessoSettings.svelte';
   import ListaMaquinas from './ListaMaquinas.svelte';
@@ -159,17 +160,24 @@
   // máquina nova (ou token trocado) volta a ser perguntada.
   const cacheIds = new Map<string, string | null>();
   let idsNavegador = $state<Record<string, string | null>>({});   // Server.id → identificador
+  // POR QUE faltou, quando faltou. "Não responde" e "responde sem identificador" pedem ações
+  // opostas (esperar a máquina voltar / preencher um campo) e saíam na mesma frase ambígua.
+  let motivosId = $state<Record<string, MotivoSemId>>({});
   let idsCarregando = $state(false);
   let emEdicao = $state<Server | null>(null);        // ServerEditSheet
   let removerLadoDeLaFalhou = $state(false);         // aviso depois de remover peer
-  const linhas = $derived(unirMaquinas(servers, idsNavegador, peers, resolvedServer?.id ?? null));
+  const linhas = $derived(unirMaquinas(servers, idsNavegador, peers, resolvedServer?.id ?? null, motivosId));
 
   // Geração da carga em voo: a resposta de um alvo que a aba já não mostra não escreve na
   // tela. Sem isto, trocar de servidor com uma chamada pendente deixa o dado do anterior
   // na tela e a remoção clicada nele sai para a máquina errada.
   let geracao = 0;
 
+  // Máquina adicionada sem reload: a carga abaixo roda de novo pra ela entrar com identificador,
+  // peer e medição, como se a tela tivesse acabado de abrir.
+  let recarga = $state(0);
   $effect(() => {
+    recarga;
     const meu = ++geracao;
     // Troca de alvo apaga o que era do anterior: erro, carregamento e diálogo aberto
     // pertencem à máquina que saiu da tela. idsNavegador NÃO zera — o cache é por máquina do
@@ -178,6 +186,10 @@
     corrigeId = null; corrigeUrl = '';
     removerLadoDeLaFalhou = false;
     emEdicao = null; avisoRemocao = ''; logoutMsg = '';
+    idRemotoErro = {}; idRemotoSalvando = '';
+    // O reinício e o "salvo" também pertencem à máquina que saiu da tela: sem isto o sucesso (ou
+    // o erro) de reiniciar a anterior ficava à vista no detalhe da nova.
+    reiniciando = false; reinicioErro = ''; reinicioFeito = false; reinicioRecusado = false; idSalvo = false;
     // Gravação em voo pertence ao alvo que saiu da tela: sem isto o campo fica `readonly`
     // e o Confirmar do diálogo nasce desabilitado, para sempre, no alvo novo.
     idSalvando = false;
@@ -241,15 +253,55 @@
     idsCarregando = true;
     const pares = await Promise.all(servers.map(async (s) => {
       const k = `${s.id}:${s.token}`;
-      if (cacheIds.has(k)) return [s.id, cacheIds.get(k)!] as const;
+      if (cacheIds.has(k)) return [s.id, cacheIds.get(k)!, 'vazio' as MotivoSemId] as const;
       let id: string | null = null;
-      try { id = (await getIdentificador(s)).identificador || null; } catch { id = null; }
+      let motivo: MotivoSemId = 'vazio';
+      try {
+        id = (await getIdentificador(s)).identificador || null;
+      } catch (e) {
+        // 401 é o token deste aparelho recusado, não a máquina fora do ar — a mesma distinção que
+        // a volta do peer já faz. Qualquer outra falha é rede: ela não respondeu.
+        id = null;
+        motivo = (e as Error & { status?: number }).status === 401 ? 'token' : 'sem_resposta';
+      }
       if (id) cacheIds.set(k, id);   // só sucesso entra no cache — fracasso não trava sem identificador pra sempre
-      return [s.id, id] as const;
+      return [s.id, id, motivo] as const;
     }));
     if (meu !== geracao) return;
-    idsNavegador = Object.fromEntries(pares);
+    idsNavegador = Object.fromEntries(pares.map(([id, valor]) => [id, valor]));
+    motivosId = Object.fromEntries(pares.map(([id, , motivo]) => [id, motivo]));
     idsCarregando = false;
+  }
+
+  // Identificador de OUTRA máquina, gravado daqui (PUT no .env dela). Sem isto, o aviso "está sem
+  // identificador" não tinha campo nenhum: só trocando o servidor da tela inteira. O erro é POR
+  // linha — uma gravação recusada não pode apagar o erro de outra.
+  let idRemotoSalvando = $state('');   // Server.id em voo ('' = nenhum)
+  let idRemotoErro = $state<Record<string, string>>({});
+  async function salvarIdentificadorRemoto(linha: LinhaMaquina, valor: string) {
+    const alvo = linha.navegador;
+    if (!alvo || idRemotoSalvando) return;
+    if (valor && !ID_OK.test(valor)) { idRemotoErro = { ...idRemotoErro, [alvo.id]: ID_DICA() }; return; }
+    const meu = geracao;
+    idRemotoSalvando = alvo.id;
+    idRemotoErro = { ...idRemotoErro, [alvo.id]: '' };
+    try {
+      const r = await setIdentificador(alvo, valor);
+      if (meu !== geracao) return;
+      // O cache é por (servidor, token): sem invalidar, a tela seguiria mostrando o nome antigo
+      // até o token mudar. E o identificador é a chave que casa navegador com peer, então a
+      // medição dos dois lados roda de novo com o nome novo.
+      cacheIds.delete(`${alvo.id}:${alvo.token}`);
+      if (r.identificador) cacheIds.set(`${alvo.id}:${alvo.token}`, r.identificador);
+      idsNavegador = { ...idsNavegador, [alvo.id]: r.identificador || null };
+      motivosId = { ...motivosId, [alvo.id]: 'vazio' };
+      await checarLista(meu);
+    } catch (e) {
+      if (meu !== geracao) return;
+      idRemotoErro = { ...idRemotoErro, [alvo.id]: msgErro(e) };
+    } finally {
+      if (meu === geracao) idRemotoSalvando = '';
+    }
   }
 
   // Mede os dois lados de cada peer: a IDA (este servidor -> peer) e a VOLTA pelo endereço que o
@@ -272,7 +324,7 @@
           .then((deLa) => {
             const eu = deLa.find((x) => x.id === meuId);
             if (!eu) return { lado: 'volta', estado: 'nao_configurado', motivo: 'registro' } as LadoState;
-            return checkPeer(nav, eu.base_url, meuId).then((r) => ({ lado: 'volta', ...r, url: eu.base_url }) as LadoState & { url: string });
+            return checkPeer(nav, eu.base_url, meuId).then((r) => ({ lado: 'volta', ...r, url: eu.base_url }) as LadoState);
           })
           .catch((e) => {
             // 401 é o token DESTE aparelho para aquela máquina recusado, não a máquina fora do ar —
@@ -286,16 +338,22 @@
       estados[p.id] = { lados: [ida, volta], ok: ida.estado === 'ok' && volta.estado === 'ok' };
       // Decisão 5 da spec: a correção de endereço abre também na montagem, quando a volta falhou
       // de verdade e este navegador tem o token para re-registrar.
-      if (volta.estado === 'falhou' && linha?.navegador && !corrigeId) {
+      // `estranho` entra junto de `falhou`: o endereço guardado lá responde como OUTRA máquina,
+      // e é exatamente o caso que este bloco conserta — sem isto ele só dizia "só de ida".
+      if ((volta.estado === 'falhou' || volta.estado === 'estranho') && linha?.navegador && !corrigeId) {
         corrigeId = p.id;
-        corrigeUrl = (volta as { url?: string }).url ?? p.base_url;
+        corrigeUrl = volta.url ?? p.base_url;
       }
     }));
   }
 
-  // Enter salva; blur salva SÓ se mudou (sair do campo sem tocar não re-PUTa o mesmo valor).
+  // Salvar é um BOTÃO, não o blur: este campo grava o CP_SERVER_ID no .env, e o nome é o que as
+  // outras máquinas usam pra chegar aqui. Gravar por sair do campo não avisa nem deixa desfazer.
+  const idMudou = $derived(identificador.trim() !== idOriginal);
+  let idSalvo = $state(false);
+  function desfazerIdentificador() { identificador = idOriginal; idErro = ''; }
   function salvarIdentificador() {
-    if (idSalvando) return;   // gravação em voo: Enter e blur não abrem uma segunda (linha 82)
+    if (idSalvando) return;   // gravação em voo: Enter e botão não abrem uma segunda (linha 82)
     const valor = identificador.trim();
     if (valor === idOriginal) return;
     if (valor && !ID_OK.test(valor)) {
@@ -306,9 +364,81 @@
     idErro = '';
     const meu = geracao;
     void setIdentificador(apiTarget, valor)
-      .then((r) => { if (meu !== geracao) return; identificador = r.identificador; idOriginal = r.identificador; })
+      .then((r) => { if (meu !== geracao) return; identificador = r.identificador; idOriginal = r.identificador; idSalvo = true; })
       .catch((e) => { if (meu !== geracao) return; idErro = msgErro(e); })
       .finally(() => { if (meu === geracao) idSalvando = false; });
+  }
+
+  // Reinício do serviço: o que faz valer Identificador, Escuta em e as outras chaves do .env. O
+  // pedido passa pelo PRÓPRIO serviço; travado, ele não chega, e aí a saída é o app do computador
+  // (o shell reinicia por fora). Fora do systemd o backend recusa com 409 e a tela diz isso.
+  let reiniciando = $state(false);
+  let reinicioErro = $state('');
+  let reinicioFeito = $state(false);
+  let reinicioRecusado = $state(false);   // 409: o servidor respondeu dizendo que não faz
+  // Ponte do shell Electron (shell/preload.cjs). Lida na hora, não no import: o preload injeta
+  // `window.hangar` antes da página, mas uma const de topo congelaria `undefined` nos testes.
+  type ReinicioShell = () => Promise<{ ok: boolean; motivo?: string; detalhe?: string }>;
+  const reinicioPeloShell = (): ReinicioShell | undefined =>
+    (window as { hangar?: { reiniciarServico?: ReinicioShell } }).hangar?.reiniciarServico;
+  // Só faz sentido no computador que RODA o serviço: o systemd do shell é o desta máquina, e
+  // mandar reiniciar daqui um servidor remoto reiniciaria o errado — o daqui, que está de pé.
+  // "Servidor ativo" NÃO basta: o ativo pode ser a máquina de outro canto, alcançada por
+  // Tailscale. A prova de que é o daqui é o endereço ser loopback.
+  const EH_LOOPBACK = /^(localhost|127(\.\d+){3}|\[?::1\]?)$/i;
+  const alvoEhLocal = $derived.by(() => {
+    try { return EH_LOOPBACK.test(new URL(resolvedServer?.baseUrl ?? window.location.origin).hostname); }
+    catch { return false; }
+  });
+  const podeReiniciarPorFora = $derived(alvoEhLocal && !!reinicioPeloShell());
+
+  async function reiniciarServico() {
+    if (reiniciando) return;
+    const meu = geracao;   // resposta tardia não escreve na máquina que entrou na tela depois
+    reiniciando = true;
+    reinicioErro = '';
+    reinicioFeito = false;
+    reinicioRecusado = false;
+    try {
+      await reiniciarServidorEm(apiTarget);
+      if (meu !== geracao) return;
+      reinicioFeito = true;
+    } catch (e) {
+      if (meu !== geracao) return;
+      // 409 é o servidor RECUSANDO com motivo (topologia que não reinicia sozinha, atualização já
+      // rodando) — ele respondeu. Chamar isso de "falha na conexão" e sugerir que está travado
+      // manda a pessoa pro caminho errado; aqui vale a frase do próprio backend.
+      reinicioRecusado = (e as { status?: number }).status === 409;
+      reinicioErro = reinicioRecusado && e instanceof Error
+        ? e.message.replace(/^\d{3}:\s*/, '')
+        : msgErro(e);
+    } finally {
+      if (meu === geracao) reiniciando = false;
+    }
+  }
+
+  // Serviço travado: o pedido HTTP não chega nele. Aqui quem manda é o systemd, pelo shell.
+  async function reiniciarPorFora() {
+    const ponte = reinicioPeloShell();
+    if (!ponte || reiniciando) return;
+    const meu = geracao;
+    reiniciando = true;
+    reinicioErro = '';
+    reinicioFeito = false;
+    reinicioRecusado = false;
+    try {
+      const r = await ponte();
+      if (meu !== geracao) return;
+      if (r.ok) reinicioFeito = true;
+      else reinicioErro = r.motivo === 'sem_systemd' || r.motivo === 'plataforma'
+        ? m.maquinas_servico_sem_systemd()
+        : `${m.maquinas_servico_shell_falhou()} ${r.detalhe ?? ''}`.trim();
+    } catch (e) {
+      if (meu !== geracao) return;
+      reinicioErro = msgErro(e);
+    } finally {
+      if (meu === geracao) reiniciando = false;
+    }
   }
 
   // Estados de checagem por peer: id -> {lados, ok, testando?} — testando é o gesto de registrar
@@ -339,7 +469,8 @@
       if (meu !== geracao) return;
       peers = lista;
       estados[r.id] = { lados: r.lados, ok: r.ok };
-      if (!r.ok) { corrigeId = r.id; corrigeUrl = r.base_url; }
+      // O bloco edita o endereço DESTA máquina (o que a volta bate), não o do peer.
+      if (!r.ok) { corrigeId = r.id; corrigeUrl = r.meu_endereco; }
     } catch (e) {
       if (meu !== geracao) return;
       estados[id] = { lados: [], ok: false };   // sai do "testando": a listagem que falhou não deixa estado preso
@@ -347,16 +478,19 @@
     }
   }
 
-  // "Testar de novo": re-registra e re-testa o peer no ENDEREÇO DIGITADO (o bloco de correção
-  // existe justamente para testar um endereço novo). Só fecha quando o par fecha; senão o estado
-  // novo fica à vista. O token vem do NAVEGADOR: só há bloco de correção em linha com navegador.
+  // "Testar de novo": re-registra e re-testa com o ENDEREÇO DIGITADO no lugar certo. A pergunta
+  // do bloco é "qual endereço o X deve usar para chegar aqui?", então o que se digita é o
+  // endereço DESTA máquina, para gravar LÁ — era passado como base_url do PEER, e o botão mexia
+  // no lado oposto ao que a frase promete. Só fecha quando o par fecha; senão o estado novo fica
+  // à vista. O token vem do NAVEGADOR: só há bloco de correção em linha com navegador.
   async function testarDeNovo(linha: LinhaMaquina) {
     const meu = geracao;
     const url = corrigeUrl.trim();
     if (!/^https?:\/\//.test(url)) { peersErro = m.url_invalida(); return; }
     peersErro = '';
     try {
-      const r = await registrarPeerDoisLados(apiTarget, { id: linha.identificador!, base_url: url, token: linha.navegador!.token });
+      const alvo = { id: linha.identificador!, base_url: linha.peer?.base_url ?? linha.navegador!.baseUrl, token: linha.navegador!.token };
+      const r = await registrarPeerDoisLados(apiTarget, alvo, url);
       if (meu !== geracao) return;
       const lista = await listarPeers(apiTarget);
       if (meu !== geracao) return;
@@ -429,6 +563,10 @@
   let removerPeerId = $state<string | null>(null);
   function removerPeerConfirmado() { const id = removerPeerId; removerPeerId = null; if (id) void removerPeer(id); }
 
+  // Largura do PAINEL, não da janela: esta tela mora dentro do modal de config, e é a coluna dele
+  // que decide se cabe lista + detalhe lado a lado. Medida por observador porque o template
+  // precisa ramificar — a consulta de contêiner sozinha só muda CSS, e aqui muda quem desenha o
+  // detalhe (coluna, no largo; folha, no estreito).
   // ✕ da linha: tira a máquina dos DOIS lados de uma vez (peer do servidor e entrada deste
   // navegador). Cada caixa desligada já fazia um lado; isto é os dois com uma confirmação.
   let removerLinha = $state<LinhaMaquina | null>(null);
@@ -474,42 +612,17 @@
   }
 </script>
 
-<div class="sv-topo">
-  <button type="button" class="sv-btn" onclick={() => { addEndereco = ''; showAdd = true; }}>+ {m.maquinas_adicionar()}</button>
-  <button type="button" class="sv-btn primario" onclick={() => (parearAberto = true)} disabled={!resolvedServer}>{m.servidores_parear()}</button>
-</div>
-{#if avisoRemocao}<p class="ss-aviso" role="status">{avisoRemocao}</p>{/if}
-{#if logoutMsg}<p class="ss-aviso" role="status">{logoutMsg}</p>{/if}
-
-{#if resolvedServer}
-  <!-- O servidor escolhido no seletor vira um cartão só; o detalhe dele traz identificador,
-       endereços e o avançado. Ele não se repete na lista de baixo. -->
-  <button type="button" class="sv-este" onclick={() => (esteAberto = true)}
-          aria-label={m.servidores_abrir_aria({ nome: resolvedServer.label })}>
-    <span class="sv-farol" class:ok={resumoTexto.farol === 'ok'} class:nao={resumoTexto.farol === 'nao'} aria-hidden="true">
-      {resumoTexto.farol === 'test' ? '◌' : '●'}
-    </span>
-    <span class="sv-txt">
-      <span class="sv-nome">{resolvedServer.label}{#if identificador}<span class="sv-id">{identificador}</span>{/if}</span>
-      <span class="sv-estado">{m.peers_esta_maquina()} · {resumoTexto.texto}</span>
-      {#if idCarregado && !identificador && !idErro}<span class="sv-estado aviso">{m.servidores_sem_identificador_curto()}</span>{/if}
-      {#if resumo?.loopback && resumoTexto.farol === 'ok'}<span class="sv-estado aviso">{m.acesso_alerta_loopback_1({ endereco: resumo.bind })}</span>{/if}
-      {#if origemRecusada}<span class="sv-estado aviso">{m.servidores_origem_recusada_curto()}</span>{/if}
-    </span>
-    <span class="sv-chev" aria-hidden="true">›</span>
-  </button>
-  {#if idErro && !esteAberto}<p class="id-erro" role="alert">{idErro}</p>{/if}
-{/if}
-
-{#if resolvedServer && esteAberto}
-  <ModalDialog open={true} ariaLabel={resolvedServer.label} onClose={() => (esteAberto = false)} className="sd-dialogo">
+{#snippet detalheEste(comFechar: boolean)}
+  {#if resolvedServer}
   <div class="sd-rolagem">
   <div class="sv-cab">
     <div class="sv-cab-txt">
       <h2 class="sv-cab-nome">{resolvedServer.label}</h2>
       <span class="sv-cab-sub">{m.peers_esta_maquina()}</span>
     </div>
-    <button type="button" class="sv-fechar" onclick={() => (esteAberto = false)} aria-label={m.sessao_fechar()}>✕</button>
+    {#if comFechar}
+      <button type="button" class="sv-fechar" onclick={() => (esteAberto = false)} aria-label={m.sessao_fechar()}>✕</button>
+    {/if}
   </div>
   <!-- Identificador (Task 5): é o CP_SERVER_ID, gravado no .env — o mesmo que o hangar-send usa
        no endereço de resposta srv::sessao. Vazio = pareamento entre servidores recusado. -->
@@ -531,12 +644,44 @@
            autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
            disabled={!idCarregado}
            readonly={idSalvando}
-           onkeydown={(e) => { idErro = ''; if (e.key === 'Enter' && !idSalvando) salvarIdentificador(); }}
-           onblur={salvarIdentificador} />
+           oninput={() => { idErro = ''; idSalvo = false; }}
+           onkeydown={(e) => { if (e.key === 'Enter' && !idSalvando) salvarIdentificador(); }} />
   </div>
+  {#if idMudou || idSalvando}
+    <div class="id-acoes">
+      <button type="button" class="btn primario" onclick={salvarIdentificador} disabled={idSalvando}>
+        {idSalvando ? m.config_motores_salvando() : m.ctx_salvar()}
+      </button>
+      <button type="button" class="btn" onclick={desfazerIdentificador} disabled={idSalvando}>{m.comum_desfazer()}</button>
+    </div>
+  {:else if idSalvo}
+    <p class="id-ok" role="status">{m.maquinas_id_salvo()}</p>
+  {/if}
   {#if idErro}<p class="id-erro" role="alert">{idErro}</p>{/if}
 
   <AcessoSettings alvo={resolvedServer} parte="detalhe">
+    {#snippet antesAvancado()}
+      <!-- Reiniciar NÃO é avançado: é o gesto que faz valer o identificador, o endereço de escuta e as
+           outras chaves do .env, e até agora o único caminho pra ele no app estava escondido no fluxo
+           de atualização. Por isso fica no corpo do detalhe, não dentro do Avançado. -->
+      <p class="ss-secao">{m.maquinas_servico()}</p>
+      <p class="ss-legenda">{m.maquinas_servico_ajuda()}</p>
+      <div class="id-acoes">
+        <button type="button" class="btn primario" onclick={reiniciarServico} disabled={reiniciando}>
+          {reiniciando ? m.maquinas_servico_reiniciando() : m.maquinas_servico_reiniciar()}
+        </button>
+        {#if reinicioFeito}<span class="id-ok" role="status">{m.maquinas_servico_pedido()}</span>{/if}
+      </div>
+      {#if reinicioErro}
+        <p class="id-erro" role="alert">{reinicioErro}</p>
+        {#if !reinicioRecusado}<p class="ss-legenda">{m.maquinas_servico_travado()}</p>{/if}
+        {#if podeReiniciarPorFora && !reinicioRecusado}
+          <div class="id-acoes">
+            <button type="button" class="btn" onclick={reiniciarPorFora} disabled={reiniciando}>{m.maquinas_servico_pelo_app()}</button>
+          </div>
+        {/if}
+      {/if}
+    {/snippet}
     {#snippet avancado()}
       <!-- Origens do terminal: mora junto dos endereços porque a pergunta é "de qual endereço o
            app pode abrir um terminal neste servidor". Quem tem um servidor só nunca precisa disso
@@ -559,17 +704,51 @@
           </div>
         {/if}
       {/if}
+
     {/snippet}
   </AcessoSettings>
 
   <!-- Tirar o servidor escolhido deste aparelho é a mesma remoção de sempre; sendo o último, o
-       diálogo avisa que isso desloga. -->
+       diálogo avisa que isso desloga — e é o ÚNICO caminho pra tirar a última máquina. -->
   {#if esteNoAparelho}
     <div class="sv-rodape">
       <button type="button" class="sv-remover-este" onclick={() => abrirRemocao(resolvedServer?.id ?? '')} disabled={logoutInFlight}>{m.servidores_remover_deste_aparelho()}</button>
     </div>
   {/if}
   </div>
+  {/if}
+{/snippet}
+
+<div class="sv-topo">
+  <button type="button" class="sv-btn" onclick={() => { addEndereco = ''; showAdd = true; }}>+ {m.maquinas_adicionar()}</button>
+  <button type="button" class="sv-btn primario" onclick={() => (parearAberto = true)} disabled={!resolvedServer}>{m.servidores_parear()}</button>
+</div>
+{#if avisoRemocao}<p class="ss-aviso" role="status">{avisoRemocao}</p>{/if}
+{#if logoutMsg}<p class="ss-aviso" role="status">{logoutMsg}</p>{/if}
+
+{#if resolvedServer}
+  <!-- O servidor escolhido no seletor vira um cartão só; o detalhe dele traz identificador,
+       endereços e o avançado. Ele não se repete na lista de baixo. -->
+  <button type="button" class="sv-este" onclick={() => (esteAberto = true)}
+          aria-label={m.servidores_abrir_aria({ nome: resolvedServer.label })}>
+    <span class="sv-farol" class:ok={resumoTexto.farol === 'ok'} class:nao={resumoTexto.farol === 'nao'} aria-hidden="true">
+      {resumoTexto.farol === 'test' ? '◌' : '●'}
+    </span>
+    <span class="sv-txt">
+      <span class="sv-nome">{resolvedServer.label}{#if identificador}<span class="sv-id">{identificador}</span>{/if}</span>
+      <span class="sv-estado">{m.peers_esta_maquina()} · {resumoTexto.texto}</span>
+      {#if idCarregado && !identificador && !idErro}<span class="sv-estado aviso">{m.servidores_sem_identificador_curto()}</span>{/if}
+      {#if origemRecusada}<span class="sv-estado aviso">{m.servidores_origem_recusada_curto()}</span>{/if}
+    </span>
+    <span class="sv-chev" aria-hidden="true">›</span>
+  </button>
+  {#if idErro && !esteAberto}<p class="id-erro" role="alert">{idErro}</p>{/if}
+{/if}
+
+
+{#if resolvedServer && esteAberto}
+  <ModalDialog open={true} ariaLabel={resolvedServer.label} onClose={() => (esteAberto = false)} className="sd-dialogo">
+    {@render detalheEste(true)}
   </ModalDialog>
 {/if}
 
@@ -594,6 +773,8 @@
   carregando={idsCarregando || peersCarregando}
   corrige={corrigeId ? { id: corrigeId, url: corrigeUrl } : null}
   {onAcompanhar} {onFalar}
+  idSalvando={idRemotoSalvando} idErro={idRemotoErro}
+  onSalvarIdentificador={(l, v) => void salvarIdentificadorRemoto(l, v)}
   onEditar={(l) => (emEdicao = l.navegador)}
   onCorrige={(u) => { if (u === null) fecharCorrige(); else corrigeUrl = u; }}
   onTestarDeNovo={testarDeNovo}
@@ -607,7 +788,7 @@
 
 <ServerEditSheet open={!!emEdicao} server={emEdicao} onClose={() => (emEdicao = null)} onRename={rename} onUpdateToken={updateToken} />
 {#if showAdd}
-  <AdicionarMaquina {fallbackFocus} onFechar={() => (showAdd = false)}
+  <AdicionarMaquina {fallbackFocus} onFechar={() => (showAdd = false)} onAdicionada={() => recarga++}
     {apiTarget} podeFalar={!!resolvedServer && !!identificador} enderecoInicial={addEndereco}
     busca={{ itens: descobertas === null ? null : novasDescobertas, buscando: descobrindo, erro: descobertasErro,
              podeBuscar: !!resolvedServer, onBuscar: buscarNoTailscale }} />
@@ -650,7 +831,9 @@
       { label: m.comum_cancelar(), onClick: () => (pendingRemoval = null) },
       { label: m.lista_remover(), kind: 'danger', onClick: confirmRemoval },
     ]}>
-    <p class="ss-dialog-copy">{m.config_servidores_token_removido()}</p>
+    <!-- Com peer na linha só o lado deste aparelho sai, e o texto tem de dizer que o recado (e o
+         token dele no servidor) fica — senão parece que apagou tudo, ou que não apagou nada. -->
+    <p class="ss-dialog-copy">{linhas.some((l) => l.navegador?.id === pendingRemoval?.id && l.peer) ? m.config_servidores_token_removido_recado_fica() : m.config_servidores_token_removido()}</p>
     {#if servers.length === 1}<p class="ss-dialog-copy">{m.config_servidores_voltar()}</p>{/if}
   </ConfirmDialog>
 {/if}
@@ -687,6 +870,8 @@
   .sv-btn.primario { background: var(--accent); border-color: var(--accent); color: #fff; }
   .sv-btn:disabled { opacity: 0.45; }
 
+  /* Painel largo: lista fixa à esquerda, detalhe à direita. Estreito: uma coluna só, como o
+     celular sempre foi — as duas regras moram aqui porque é a MESMA tela nos dois tamanhos. */
   .sv-este { display: flex; align-items: center; gap: var(--space-3); width: 100%; min-height: 60px; padding: var(--space-3);
              text-align: left; color: var(--text-primary); border: 1px solid var(--border-default); border-radius: var(--radius-md); }
   .sv-este:hover { background: var(--bg-hover); }
@@ -745,6 +930,7 @@
   .id-erro { margin: 0 0 var(--space-2) var(--space-2); font-size: var(--text-xs); color: var(--error); }
   .id-linha { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-3); margin: 0 0 var(--space-3); }
   .id-ok { font-size: var(--text-xs); color: var(--text-secondary); }
+  .id-acoes { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-2) 0 var(--space-3); }
   .btn {
     height: 40px; padding: 0 var(--space-4);
     border-radius: var(--radius-md);

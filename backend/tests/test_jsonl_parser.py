@@ -220,6 +220,45 @@ def test_system_reminder_stripped_from_real_message():
     assert ev.kind == "user_msg" and ev.text == "roda o teste"
 
 
+def test_pasted_content_envelope_is_unwrapped():
+    # Texto colado no composer (todo recado do hangar-send chega assim): o CLI 2.1.278 embrulha em
+    # <pasted_content id="…">, com o id repetido na tag de FECHAMENTO. Fica so o conteudo.
+    [ev] = parse_line(_line({
+        "type": "user", "uuid": "p1",
+        "message": {"role": "user",
+                    "content": '\n\n<pasted_content id="2b26">\n[de: outra] recado\n</pasted_content id="2b26">\n'},
+    }))
+    assert ev.kind == "user_msg" and ev.text == "[de: outra] recado"
+
+
+def test_rewrite_filter_descarta_a_conversa_regravada_pelo_resume():
+    # `claude --resume` regrava a conversa inteira no mesmo jsonl (uuid novo, timestamp original):
+    # a copia fica fora; mensagem NOVA depois dela entra; retrocesso de milissegundos nao e copia.
+    from app.transcript import RewriteFilter
+    def u(uuid, ts, text):
+        return {"type": "user", "uuid": uuid, "timestamp": ts,
+                "message": {"role": "user", "content": text}}
+    f = RewriteFilter()
+    assert f.keep(u("a1", "2026-09-18T11:24:35.529Z", "oi"))
+    assert f.keep(u("a2", "2026-09-19T13:28:59.412Z", "tchau"))
+    assert f.keep(u("a3", "2026-09-19T13:28:59.300Z", "quase junto"))          # 112ms atras: legitimo
+    assert not f.keep(u("b1", "2026-09-18T11:24:35.529Z", "oi"))               # copia do resume
+    assert not f.keep(u("b2", "2026-09-19T13:28:59.412Z", "tchau"))            # dentro da janela, repetida
+    assert f.keep(u("c1", "2026-09-19T13:30:00.000Z", "mensagem nova"))
+
+
+def test_recado_nativo_do_backend_nao_dobra_o_prefixo():
+    # O backend escreve o recado no socket JA com "[de: X] …" (ou "[grupo: X] …") no corpo; o
+    # parser mostra o corpo como esta, em vez de "[de: X] [grupo: X] …".
+    [ev] = parse_line(_line({
+        "type": "user", "uuid": "n1", "isMeta": True,
+        "origin": {"kind": "peer", "from": "uds:/run/user/1000/cc-socks/1.sock", "name": "x",
+                   "body": "[grupo: x] aviso do grupo"},
+        "message": {"role": "user", "content": '<cross-session-message from="uds:/x" from-name="x">\n[grupo: x] aviso do grupo\n</cross-session-message>'},
+    }))
+    assert ev.kind == "user_msg" and ev.text == "[grupo: x] aviso do grupo"
+
+
 def test_ismeta_user_entry_is_skipped():
     # Expansao de slash-command/skill: o Claude Code injeta o CORPO do comando como entrada "user"
     # marcada isMeta=True. Sem tag nenhuma (texto puro), so o flag isMeta a distingue de conversa.

@@ -26,8 +26,9 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
   import StateChip from './StateChip.svelte';
   import type { Provider, State, SessionInfo, PlanDetail, ChatEvent, Activity, ShellVivo } from '@hangar/core';
   import type { StatusFields, Shortcut, ShortcutSendText, ShortcutShell } from '@hangar/core';
-  import { ctxWindow, providerName, defaultShortcuts } from '@hangar/core';
+  import { comTeto, ctxWindow, defaultShortcuts, getSessionCostForServer, providerName, type SessionCostEstimate } from '@hangar/core';
   import ShortcutIcon from './icons/ShortcutIcon.svelte';
+  import { listServers } from '../lib/auth';
   import { money2 } from '../lib/fmt';
   import { moeda } from '../lib/moeda.svelte';
   import { criarArquivosMudados } from '../lib/arquivosMudados.svelte';
@@ -128,7 +129,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
   }
 
   let {
-    state, stateDetail = null, status = null, pairPeers = null,
+    state: sessionState, stateDetail = null, status = null, pairPeers = null,
     events = null, histGap = '', cwd = null,
     serverLabel = '', provider = 'claude', sessionName = '', serverId = '',
     onOpenTerminal = undefined, terminalAlert = false,
@@ -247,15 +248,58 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
     return n < 1000 ? String(Math.round(n)) : ctxWindow(n);
   }
 
-  // Custo acumulado da sessao: so a statusline mede, e ate agora ele so aparecia la embaixo no
-  // terminal. Moeda e cotacao sao as do app inteiro (lib/moeda) — sem cotacao o fmt cai pro dolar.
+  let costSnapshot = $state<{ key: string; value: SessionCostEstimate | null; error: string | null } | null>(null);
+  let wideEnough = $state(typeof window !== 'undefined' && window.innerWidth >= 1280);
+  const costKey = $derived(`${serverId}::${sessionName}::${session?.jsonl ?? ''}`);
+  const codexCost = $derived(costSnapshot?.key === costKey ? costSnapshot : null);
+  $effect(() => {
+    const key = costKey;
+    if (provider !== 'codex' || !serverId || !sessionName || !session?.jsonl || !wideEnough || ctxPanel.recolhido
+        || ctxPanel.aba !== 'contexto' || gitAberto) return;
+    const server = listServers().find((item) => item.id === serverId);
+    if (!server) return;
+    let controller: AbortController | null = null;
+    let lastValue: SessionCostEstimate | null = null;
+    const load = async () => {
+      controller?.abort();
+      const current = new AbortController();
+      controller = current;
+      try {
+        const value = await getSessionCostForServer(server, sessionName, comTeto(current.signal, 25_000));
+        if (!current.signal.aborted) {
+          lastValue = value;
+          costSnapshot = { key, value, error: null };
+        }
+      } catch (error) {
+        if (!current.signal.aborted) {
+          costSnapshot = { key, value: lastValue, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => { void load(); }, 30_000);
+    return () => { window.clearInterval(timer); controller?.abort(); };
+  });
+
+  // Claude publica o custo na statusline; Codex usa o histórico da sessão e a tarifa de API.
+  const costAmount = $derived(provider === 'codex' ? codexCost?.value?.cost_usd : status?.costUsd);
   const custoLabel = $derived(
-    typeof status?.costUsd === 'number' && isFinite(status.costUsd)
-      ? money2(status.costUsd, moeda.cur, moeda.rate)
+    typeof costAmount === 'number' && isFinite(costAmount)
+      ? money2(costAmount, moeda.cur, moeda.rate)
       : null,
   );
+  const custoTitle = $derived.by(() => {
+    if (provider !== 'codex') return undefined;
+    if (codexCost?.error) return codexCost.error;
+    const missing = codexCost?.value?.missing_models ?? [];
+    return missing.length ? `${m.custos_sem_tarifa_volume()}: ${missing.join(', ')}` : m.custos_aviso_estimativa();
+  });
+  const costCaption = $derived.by(() => {
+    if (provider !== 'codex') return m.ctx_nesta_sessao();
+    return codexCost?.value?.missing_models.length ? m.custos_sem_tarifa() : m.custos_estimativa_api();
+  });
   $effect(() => {
-    if (status?.costUsd != null) moeda.garantirCotacao();
+    if (costAmount != null) moeda.garantirCotacao();
   });
   // Duracao CRUA ("12min", "3h", "2d"), nao o relativeTime do core: ele ja embute o "atras", e a
   // frase daqui e "trabalhando ha {t}" — as duas juntas davam "trabalhando ha 12 min atras".
@@ -273,7 +317,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
   // detalhe do estado, no header deste painel ("Boogieing… (46m 15s)"). Um segundo relógio contado
   // daqui discordava dele na mesma tela (contava do último prompt, não do começo do turno).
   const tempoNoEstado = $derived.by(() => {
-    if (state === 'working') return null;
+    if (sessionState === 'working') return null;
     const ts = session?.last_activity;
     return ts ? m.ctx_parada_ha({ t: duracaoCurta(ts) }) : null;
   });
@@ -311,7 +355,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
   // store (arrastarLargura), salva no soltar. Sem transicao de width no painel, o arrasto
   // segue o ponteiro sem lag — a classe resizing fica como trava contra alguém adicionar
   // transicao depois (mesmo motivo do .sidebar.resizing). O flag `resizing` vive no store
-  // (ctxPanel) porque o componente tem uma prop `state` e o rune `$state` colide com ela.
+  // (ctxPanel) porque a largura e compartilhada com o DesktopShell.
   function resizeStart(e: PointerEvent) {
     ctxPanel.resizing = true;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -347,6 +391,8 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
     return () => { ctxPanel.resizing = false; };
   });
 </script>
+
+<svelte:window onresize={() => (wideEnough = window.innerWidth >= 1280)} />
 
 <aside class="session-context" class:recolhido={ctxPanel.recolhido} class:toggle-externo={toggleExterno} class:resizing={ctxPanel.resizing} aria-label={m.ctx_painel_titulo()}>
   {#if !ctxPanel.recolhido}
@@ -392,7 +438,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
     </div>
     <div class="header-right">
       <MoverBloco bloco="ctx" />
-      <StateChip {state} size="md" />
+      <StateChip state={sessionState} size="md" />
       {#if loopLabel}
         <button type="button" class="loop-chip" style="color: {loopColor};" onclick={onLoopTap} aria-label={m.ctx_aria_loop({ n: loopLabel })}>{loopLabel}</button>
       {/if}
@@ -418,11 +464,13 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
       {#each atalhosVisiveis as s (s.id)}
         {#if s.type === 'internal' && s.action === 'terminal'}
           <button class="ctx-action terminal-btn" class:alert={terminalAlert} onclick={onOpenTerminal} aria-label={m.ctx_terminal()}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="2.5" y="4" width="19" height="16" rx="2"/>
-              <path d="M6.5 9l3 3-3 3"/>
-              <line x1="12.5" y1="15" x2="17" y2="15"/>
-            </svg>
+            <span class="animated-icon" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="2.5" y="4" width="19" height="16" rx="2"/>
+                <path d="M6.5 9l3 3-3 3"/>
+                <line x1="12.5" y1="15" x2="17" y2="15"/>
+              </svg>
+            </span>
             <span>{m.ctx_terminal()}</span>
           </button>
         {:else if s.type === 'internal' && s.action === 'modo'}
@@ -560,10 +608,10 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
           {m.ctx_do_contexto()}{#if status?.ctxUsed != null && status.ctxTotal}<span class="mono">&nbsp;· {m.ctx_usado_de_total({ usado: ctxWindow(status.ctxUsed), total: ctxWindow(status.ctxTotal) })}</span>{:else if status?.ctxTotal}<span class="mono">&nbsp;· {ctxWindow(status.ctxTotal)}</span>{/if}
         </span>
       </span>
-      {#if custoLabel}
-        <span class="agora-custo">
-          <strong>{custoLabel}</strong>
-          <span>{m.ctx_nesta_sessao()}</span>
+      {#if custoLabel || provider === 'codex'}
+        <span class="agora-custo" title={custoTitle}>
+          <strong>{custoLabel ?? '—'}</strong>
+          <span>{costCaption}</span>
         </span>
       {/if}
     </div>
@@ -780,6 +828,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
        scroller, entao o nome da sessao e o botao Terminal subiam junto com as metricas. */
     display: flex;
     flex-direction: column;
+    container-type: inline-size;
     /* COLUNA do shell, não card por cima da conversa: o nó é reparentado pelo Chat pra `.ctx-slot`
        (DesktopShell), que é quem reserva a largura. `relative` fica pelos filhos absolutos daqui
        (o punho de arrastar, os pontinhos de aviso). Enquanto era `absolute`, trocar de lugar com
@@ -1018,9 +1067,11 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
     line-height: 1;
   }
 
+  .animated-icon { display: inline-flex; flex-shrink: 0; }
+
   .terminal-btn { color: var(--text-secondary); }
   .terminal-btn.alert { color: var(--accent); }
-  .terminal-btn.alert svg { animation: breathe 1.4s ease-in-out infinite; }
+  .terminal-btn.alert .animated-icon { animation: breathe 1.4s ease-in-out infinite; }
 
   .run-btn { position: relative; }
   .run-btn.running { color: var(--success); }
@@ -1034,7 +1085,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
     50%      { opacity: 1;    transform: scale(1.05); }
   }
   @media (prefers-reduced-motion: reduce) {
-    .terminal-btn.alert svg { animation: none; }
+    .terminal-btn.alert .animated-icon { animation: none; }
   }
 
   /* Turno ativo: hairline accent varrendo o TOPO do painel (a irma da work-sweep da NavBar).
@@ -1115,6 +1166,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
   .agora-ctx { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
   .agora-num {
     display: inline;
+    flex-shrink: 0;
     color: var(--text-primary);
     font-size: 44px;
     font-weight: var(--fw-semibold);
@@ -1153,6 +1205,40 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
     font-size: var(--text-2xs);
   }
   .agora-linha span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  @container (max-width: 380px) {
+    .ctx-actions { flex-wrap: wrap; }
+    .ctx-actions > .ctx-action { flex: 1 1 calc(50% - 2px); }
+    .acao-divisor { display: none; }
+
+    .agora-topo {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: start;
+      column-gap: var(--space-2);
+      row-gap: 2px;
+    }
+    .agora-ctx { display: contents; }
+    .agora-num { grid-column: 1; grid-row: 1; overflow: visible; }
+    .agora-custo { grid-column: 2; grid-row: 1; }
+    .agora-cap {
+      grid-column: 1 / -1;
+      grid-row: 2;
+      overflow: visible;
+      white-space: normal;
+    }
+    .agora-linha { display: block; }
+    .agora-linha span {
+      display: block;
+      overflow: visible;
+      white-space: normal;
+    }
+    .agora-linha span + span { margin-top: 2px; }
+
+    .ctx-aviso { flex-wrap: wrap; }
+    .ctx-aviso-texto { flex-basis: 100%; }
+    .ctx-aviso-btn { margin-left: auto; }
+  }
 
   /* Limites dentro do topo vivo: respiro entre a barra de contexto e as de cota, sem régua
      (continuam sendo o mesmo assunto). */

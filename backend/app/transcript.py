@@ -75,6 +75,13 @@ _COMMAND_META_PREFIXES = (
 # se sobrar so o bloco, a msg inteira e meta e nao vira bubble.
 _META_BLOCK_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
 
+# Texto COLADO no composer (o hangar-send entrega por paste-buffer, entao todo recado cai aqui):
+# o CLI grava embrulhado em <pasted_content id="…">…</pasted_content>. O envelope e marcacao do
+# harness, nao conversa — fica so o conteudo, que e o que a pessoa (ou a sessao-irma) escreveu.
+# O id se repete na tag de fechamento e e exigido igual: texto da pessoa que so CITE as tags nao
+# tem esse par casado e continua inteiro.
+_PASTED_RE = re.compile(r'<pasted_content id="([^"]*)">\n?(.*?)\n?</pasted_content id="\1">', re.DOTALL)
+
 # task-id de uma <task-notification> (fim de agente/workflow em background). A notificacao fica
 # fora do chat (e ruido), mas o painel de Atividade precisa do sinal de termino: viram um
 # tool_result SINTETICO com tool_use_id="task:<id>" (o front nunca renderiza tool_result orfao;
@@ -98,6 +105,7 @@ _TASK_NOTIF_RE = re.compile(r"<task-id>([^<]+)</task-id>")
 _PEER_WRAP_RE = re.compile(r"<cross-session-message\b([^>]*)>\n?(.*?)\n?</cross-session-message>",
                            re.DOTALL)
 _PEER_ATTR_RE = re.compile(r'([\w-]+)="([^"]*)"')
+_PEER_PREFIXO_RE = re.compile(r"^\[(de|grupo|painel):\s*[^\]]+\]")
 _PEER_SOCK_PID_RE = re.compile(r"/(\d+)\.sock")
 
 
@@ -141,6 +149,10 @@ def _peer_msg(obj: dict) -> Optional[str]:
     if not isinstance(corpo, str) or not corpo.strip():
         return None
     pid = origin.get("verifiedPeerPid")
+    # Recado que o backend escreveu no socket ja vem com o prefixo do hangar-send ("[de: X] …",
+    # "[grupo: X] …"): repetir "[de: …]" na frente perderia o [grupo:] e dobraria o remetente.
+    if _PEER_PREFIXO_RE.match(corpo.lstrip()):
+        return corpo.strip()
     return (f"[de: {_peer_nome(pid if isinstance(pid, int) else None, origin.get('name'))}] "
             f"{corpo.strip()}")
 
@@ -172,6 +184,8 @@ def _peer_msg_embrulhado(texto) -> Optional[str]:
         # e o dia em que isso vira texto podre exibido, em vez de duas mensagens.
         return None
     attrs = dict(_PEER_ATTR_RE.findall(m.group(1)))
+    if _PEER_PREFIXO_RE.match(corpo.lstrip()):
+        return corpo.strip()
     sock = _PEER_SOCK_PID_RE.search(attrs.get("from", ""))
     return f"[de: {_peer_nome(int(sock.group(1)) if sock else None, attrs.get('from-name'))}] {corpo}"
 
@@ -226,7 +240,7 @@ def _is_command_meta(text: str) -> bool:
 
 
 def _strip_meta_blocks(text: str) -> str:
-    return _META_BLOCK_RE.sub("", text).strip()
+    return _PASTED_RE.sub(r"\2", _META_BLOCK_RE.sub("", text)).strip()
 
 
 def parse_line(line: str) -> list[ChatEvent]:
@@ -238,6 +252,55 @@ def parse_line(line: str) -> list[ChatEvent]:
     except (json.JSONDecodeError, ValueError):
         return []
     return parse_obj(obj)
+
+
+class RewriteFilter:
+    """`claude --resume` regrava a conversa INTEIRA no mesmo jsonl: cada mensagem volta com uuid
+    novo e o timestamp original, entao lido do zero o transcript mostra tudo duas vezes. Descarta
+    linha de user/assistant cujo relogio esta mais de _JANELA_S atras do maior ja visto (a
+    reescrita recomeca no inicio da sessao; retrocesso legitimo e de milissegundos) e, dentro da
+    janela, repeticao exata de (timestamp, conteudo). Um por leitor: o estado e a posicao dele."""
+    _JANELA_S = 60.0
+
+    def __init__(self) -> None:
+        self._max = 0.0
+        self._recentes: dict[tuple[str, str], float] = {}
+
+    def keep(self, obj: dict) -> bool:
+        if obj.get("type") not in ("user", "assistant"):
+            return True
+        t = obj.get("timestamp")
+        if not isinstance(t, str):
+            return True
+        try:
+            ts = datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return True
+        if ts < self._max - self._JANELA_S:
+            _log.debug("reescrita do --resume: descartando %s de %s (max %.0f)", obj.get("type"), t, self._max)
+            return False
+        conteudo = json.dumps((obj.get("message") or {}).get("content"), sort_keys=True,
+                              ensure_ascii=False)
+        fp = (t, hashlib.md5(conteudo.encode("utf-8")).hexdigest())
+        if fp in self._recentes:
+            _log.debug("reescrita do --resume: descartando repeticao exata de %s em %s", obj.get("type"), t)
+            return False
+        self._recentes[fp] = ts
+        if ts > self._max:
+            self._max = ts
+            if len(self._recentes) > 256:
+                self._recentes = {k: v for k, v in self._recentes.items() if v >= ts - self._JANELA_S}
+        return True
+
+    def parse_line(self, line: str) -> list[ChatEvent]:
+        line = line.strip()
+        if not line:
+            return []
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            return []
+        return parse_obj(obj) if self.keep(obj) else []
 
 
 def _sub_id(uid: str, k: int) -> str:
@@ -393,7 +456,7 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
                         kind="tool_result", id=_sub_id(uid, k),
                         tool_use_id=tr.get("tool_use_id"),
                         result=str(res) if res is not None else None,
-                        is_error=bool(tr.get("is_error", False)),
+                        is_error=bool(tr.get("is_error", False)), ts=_ts(obj),
                     ))
                 return out
             # Imagens coladas no terminal: contar os blocos `image` -> o front busca cada uma lazy.
@@ -599,7 +662,9 @@ class TranscriptTailer:
         # Parser injetavel: default e o parse_line do Claude (snake_case), mas o CodexAdapter
         # reaproveita a mesma mecanica de tail (backfill + watch de append) passando
         # parse_rollout_line (shape do rollout do Codex e diferente).
-        self._parse_line = parse_line
+        # So o parser do Claude ganha o filtro de reescrita do --resume; embrulhar o do Pi
+        # esconderia o `flush_events` que _read_from procura no dono do parser.
+        self._parse_line = RewriteFilter().parse_line if parse_line is globals()["parse_line"] else parse_line
 
     def _read_from(self, pos: int) -> tuple[list[ChatEvent], int]:
         # Le do offset `pos` ate o fim -> (eventos parseados, novo offset). Sincrono de proposito:

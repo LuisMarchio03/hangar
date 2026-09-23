@@ -45,4 +45,13 @@ function proximaAtiva(ids, fechada, anterior) {
   return vivos.find((i) => i > fechada) ?? vivos[0];
 }
 
-module.exports = { uaDeChrome, normalizaBounds, urlNavegavel, nomeSidecar, proximaAtiva };
+// Host de loopback: o único onde certificado inválido passa (servidor de dev com auto-assinado).
+// Nome que só PARECE local (`localhost.exemplo.com`, `127.0.0.1.nip.io`) não conta.
+function hostLoopback(host) {
+  const h = String(host || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === 'localhost' || h === '::1') return true;
+  const m = /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  return !!m && m.slice(1).every((o) => Number(o) <= 255);
+}
+
+module.exports = { uaDeChrome, normalizaBounds, urlNavegavel, nomeSidecar, proximaAtiva, hostLoopback };

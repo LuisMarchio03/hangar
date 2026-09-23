@@ -77,7 +77,9 @@
   import type { ShortcutSendText, ShortcutShell } from '@hangar/core';
   import { shortcutsDe, carregarShortcuts } from '../lib/shortcuts.svelte';
   import { abrirConfig } from '../lib/configNav';
-  import { listServers, getActiveId, getBaseUrl } from '../lib/auth';
+  import { listServers, getActiveId, getBaseUrl, selectServer } from '../lib/auth';
+  import { getIdentificador } from '../lib/peers';
+  import { destinoDoRemetente } from '../lib/remetente';
   import { createActivityFolder } from '@hangar/core';
   import type { ChatEvent, StateEvent, StatsEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail, UploadFile } from '@hangar/core';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
@@ -904,8 +906,7 @@
   // Com stream, só ele: depois de trocar de modo a lista ainda diz o modo antigo por um poll.
   const sessionHeadless = $derived(stateEvent ? stateEvent.headless === true
     : allSessions.find((s) => s.name === sessionName)?.headless === true);
-  // Troca terminal ⇄ sem terminal: só Claude e só parada (o backend confere de novo e dá 409).
-  const modoTrocavel = $derived(sessionProvider === 'claude');
+  const modoTrocavel = $derived(sessionProvider === 'claude' || sessionProvider === 'codex');
   let trocandoModo = $state(false);
   // A troca reinicia o processo da sessão e muda onde ela vive; um clique no botão errado ("Abrir
   // no terminal" ao lado de Navegador/Rodar) fazia isso sem aviso. Confirma antes, dizendo o quê.
@@ -2478,6 +2479,10 @@
 
   async function handleSend(text: string, steer = false, onlyThisSession = false) {
     if (abrirBtwSe(text)) return;
+    if (isCodex && /^\/compact(?:\s|$)/.test(text.trim())) {
+      await sendInput(sessionName, text);
+      return;
+    }
     // Eco imediato SEMPRE (não só em 'working'): o transcript só grava a msg quando o TURNO dela
     // começa — sessão ocupada num turno longo deixava a msg invisível por minutos, e a corrida de
     // estado (flip idle->working no instante do envio) derrubava até o eco condicional antigo
@@ -2685,6 +2690,24 @@
     else await composerRef?.prefillText(s.text);
   }
 
+  // Chip "de: X" do recado. `X` pode ser `servidor::sessao`: abrir isso como nome no servidor ativo
+  // dava "sessão não encontrada".
+  async function abrirRemetente(from: string) {
+    const cache = sessionsStore.identities;
+    // Servidor fora do ar segura a resposta até o timeout: se a pessoa já saiu desta tela, o clique
+    // velho não pode trocar o servidor ativo nem navegar por cima do que ela abriu depois.
+    const hashDoClique = window.location.hash;
+    const destino = await destinoDoRemetente(from, listServers(), getActiveId(),
+      async (s) => cache.get(s.id) ?? (await getIdentificador(s)).identificador);
+    if (window.location.hash !== hashDoClique) return;
+    if (!destino) { mostrarAviso(m.user_remetente_fora_do_aparelho({ n: from })); return; }
+    if (destino.serverId && !selectServer(destino.serverId)) {
+      mostrarAviso(m.user_remetente_fora_do_aparelho({ n: from }));   // removido durante a busca
+      return;
+    }
+    onNavigateToChat(destino.name);
+  }
+
   // Trava de um envio por vez (mesma do BoardCard): o /select agora le o cursor do picker, corrige
   // e so entao da Enter — dois toques rapidos leriam a mesma tela e se atropelariam no meio.
   let selBusy = $state(false);
@@ -2878,7 +2901,7 @@
       onRecarregar={recarregar}
       recarregarBloqueado={currentState !== 'idle' || recarregando}
       onAbrirArquivo={nested ? undefined : (p) => void filesStore.abrir(p)}
-      onCompactar={sessionProvider === 'claude' && currentState !== 'dead'
+      onCompactar={(sessionProvider === 'claude' || isCodex) && currentState !== 'dead'
         ? () => void composerRef?.preencherComando('compact') : undefined}
       onPassarBastao={nested ? undefined : passarBastaoDaqui}
       session={planSession}
@@ -3044,7 +3067,7 @@
       onAnswer={handleAnswer}
       onAskClose={closeAsk}
       onForward={(t) => (forwardText = t)}
-      onOpenSession={onNavigateToChat}
+      onOpenSession={abrirRemetente}
       onOpenOrq={() => (orqOpen = true)}
       onDescartarFila={descartarFila}
     />
@@ -3161,6 +3184,7 @@
         onCommand={handleCommand}
         onInterrupt={handleInterrupt}
         onOpenGit={() => (gitOpen = true)}
+        onOpenUsage={() => (usageOpen = true)}
         onOpenPreview={() => (previewOpen = true)}
         provider={sessionProvider}
         engine={sessionEngine}
@@ -3230,7 +3254,7 @@
                    onNavigateToChat={onNavigateToChat} />
   {/if}
 
-  <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} />
+  <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} stats={statsEvent} {lastCache} title={sessionName} conta={desktop ? null : contaChip} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} />
   <BtwSheet open={btwOpen} {sessionName} pergunta={btwPergunta} onClose={() => (btwOpen = false)} />
 
   <Git open={gitOpen} {sessionName} {desktop} {filesInContext} initialTab={gitInitialTab} onClose={() => { gitOpen = false; gitInitialTab = 'changes'; }}
@@ -3387,13 +3411,23 @@
 
   .chat-error {
     flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
     gap: var(--space-4);
     padding-top: var(--nav-h, 56px);
+    /* O composer e as pílulas acima dele ficam POR CIMA desta área: sem descontá-los, o fim do
+       conteúdo (as opções do cartão do Codex) caía atrás do composer, sem como rolar até lá. */
+    padding-bottom: calc(var(--cp-dock-h, 150px) + var(--cp-tts-h, 0px) + 56px);
+    overflow-y: auto;
   }
+  /* Centro com margem automática, não justify-content: quando o conteúdo passa da altura, a margem
+     vira zero e o topo continua alcançável pelo scroll (center cortaria o começo). */
+  .chat-error > :global(:first-child) { margin-top: auto; }
+  .chat-error > :global(:last-child) { margin-bottom: auto; }
+  /* Com a área rolando, o flex achataria a lista de passos (que tem scroll próprio) até sumir. */
+  .chat-error > :global(*) { flex-shrink: 0; }
 
   /* Vence o teto de 380px do `.chat-error` por especificidade (duas classes contra uma): aqui o
      conteúdo é um cartão de escolha, e ele acompanha a largura disponível até o teto do cartão. */

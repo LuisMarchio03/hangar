@@ -381,12 +381,28 @@ def test_is_overlay_ve_o_trust_dialog_do_claude():
     # Pane real (30 linhas) do "Accessing workspace" que o Claude Code mostra em pasta nova: a caixa
     # ocupa o ALTO e o fundo fica em branco, entao o rodape cai fora das 8 ultimas linhas. Enquanto
     # is_overlay dizia False o envio digitava as cegas e o Enter caia em "No, exit" (a opcao sob o
-    # cursor), matando a sessao. As opcoes nao sao numeradas, entao classify nem chama de menu — este
-    # gate e a unica defesa.
+    # cursor), matando a sessao.
     pane = (Path(__file__).parent / "fixtures" / "pane_trust_dialog.txt").read_text(encoding="utf-8")
     assert "❯ No, exit" in pane
-    assert state_mod.classify(pane)[0] == "idle"
+    assert state_mod.classify(pane) == ("awaiting_input", None, "Accessing workspace:",
+                                        ["No, exit", "Yes, I trust this folder"])
     assert state_mod.is_overlay(pane) is True
+
+
+def test_dialogo_sem_numero_e_sem_rodape_e_pergunta():
+    # "Make auto mode your default permission mode?" (Claude Code 2.1.280): opcoes sem numero e sem
+    # rodape de navegacao. Classificado como idle, o envio digitava em cima da pergunta e voltava
+    # erro_envio_incompleto_composer a cada tentativa.
+    pane = (Path(__file__).parent / "fixtures" / "pane_auto_mode_dialog.txt").read_text(encoding="utf-8")
+    assert state_mod.classify(pane) == (
+        "awaiting_input", None, "Make auto mode your default permission mode?",
+        ["Yes, set auto mode as my default permission mode", "No, keep bypass permissions"])
+
+
+def test_composer_com_rascunho_nao_vira_dialogo_sem_numero():
+    pane = ("● feito\n" + "─" * 40 + "\n❯ Try \"fix lint errors\"\n  segunda linha\n" + "─" * 40 +
+            "\n  ⏵⏵ bypass permissions on\n")
+    assert state_mod.classify(pane)[0] == "idle"
 
 
 def test_status_line_is_the_chrome_below_the_input_box():

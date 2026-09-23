@@ -784,7 +784,7 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     unmount(t.comp);
   });
 
-  it('B4 — "Testar de novo" do bloco de correção registra e testa no ENDEREÇO DIGITADO', async () => {
+  it('B4 — "Testar de novo" grava o ENDEREÇO DIGITADO como o DESTA máquina, no peer', async () => {
     const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://192.168.0.77:8765', token: 'segredo' } as Server;
     peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'notebook' : 'casa' }));
     peersMock.gravarPeer.mockImplementation(async () => [
@@ -809,11 +809,19 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     campo!.dispatchEvent(new Event('input', { bubbles: true }));
     await tick();
     document.querySelector<HTMLButtonElement>('.corrige .btn.primaria')!.click();
-    // o gesto de correção roda contra o NOVO endereço, com o token do NAVEGADOR (hoje não rodava contra nada)
     await esperarCarga();
+    // A pergunta do bloco é "qual endereço o X deve usar para chegar aqui?": o que se digita é o
+    // endereço DESTA máquina, para gravar LÁ. Isto era assertado como `base_url` do próprio peer
+    // — o lado oposto ao que a frase promete, e o botão consertava o endereço errado.
+    // A volta fala com o B da LISTA (srv-b): é por esse id que a resposta limpa a marca de offline.
+    expect(peersMock.gravarPeer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'srv-b', baseUrl: 'http://192.168.0.77:8765', token: 'segredo' }),
+      expect.objectContaining({ id: 'casa', base_url: 'http://novo:9999' }),
+    );
+    // e o peer continua registrado aqui no endereço DELE, que o gesto não estava corrigindo
     expect(peersMock.gravarPeer).toHaveBeenCalledWith(
       null,
-      expect.objectContaining({ id: 'notebook', base_url: 'http://novo:9999', token: 'segredo' }),
+      expect.objectContaining({ id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' }),
     );
     // o bloco só fecha quando o par fecha (o r.ok do segundo giro, com o mock default ok)
     expect(document.querySelector('.corrige')).toBeNull();

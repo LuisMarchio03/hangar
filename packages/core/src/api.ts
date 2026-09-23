@@ -6,7 +6,7 @@ import { localeAtual } from './i18n';
 import { mensagemDeErro, formataErro, type EnvelopeErro } from './errosApi';
 // diag NÃO importa api (ele usa `fetch` direto) — é o que mantém esta dependência de mão única.
 import { registrar as registrarDiag, novoReq } from './diag';
-import { estaDesligado, registrarFalha, registrarSucesso } from './esfriamento';
+import { retryAfterMs, registrarFalha, registrarSucesso } from './esfriamento';
 import type { CotaContaResumo } from './cotaResumo';
 import type { UsoFiltros, UsoReport } from './uso';
 import type {
@@ -220,16 +220,15 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 // quem precisa do STATUS ou de um header — hoje o histórico condicional (304 + ETag), que não tem
 // corpo pra desserializar e cujo status não é erro. O diário e o rastreio de "sem rede/voltou"
 // ficam aqui: um fetch escrito à mão sairia do registro sem ninguém notar.
-async function apiFetchRes(path: string, init?: RequestInit, server?: Server): Promise<Response> {
+async function apiFetchRes(path: string, init?: RequestInit, server?: Server, probe = false): Promise<Response> {
   const base = server?.baseUrl ?? apiEnv().getBaseUrl();
   const url = `${base}${path}`;
   const t0 = Date.now();
   // Id do pedido: vai no cabeçalho e na linha do diário dos DOIS lados, pra quem analisa seguir a
   // cadeia (o toque na tela -> o que o servidor fez) sem depender de comparar horário.
   const req = novoReq();
-  // Servidor esfriando: recusa aqui, sem abrir socket. Só vale pra chamada a OUTRO servidor — o
-  // local não tem rede no meio, e barrar a própria máquina deixaria o app mudo por engano.
-  if (server && estaDesligado(server.id)) {
+  // Durante a espera, só uma verificação explícita pode antecipar a nova tentativa.
+  if (server && retryAfterMs(server.id) > 0 && !probe) {
     throw new Error(m.esfriamento_servidor_desligado({ servidor: server.label },
                                                      { locale: localeAtual() }));
   }
@@ -256,12 +255,13 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server): P
     // já traça pro resto do app. Quem for abortar por um motivo NOVO (um teto de tempo escrito à
     // mão, por exemplo, em vez do `AbortSignal.timeout`) precisa saber disto: por este caminho a
     // falha some do diário sem deixar rastro.
-    if (!isAbortError(e)) {
+    const timedOut = init?.signal?.aborted && init.signal.reason?.name === 'TimeoutError';
+    if (!isAbortError(e) || timedOut) {
       const rota = `${(init?.method ?? 'GET').toUpperCase()} ${rotaGenerica(path)}`;
       const poll = rota.startsWith('GET ');
       if (!poll || !_semRede.has(`${base}|${rota}`)) {
         registrarDiag({ evento: 'api.sem_rede', nivel: 'erro', ms: Date.now() - t0, req, detalhe: rota,
-          codigo: e instanceof Error && e.name === 'TimeoutError' ? 'timeout' : 'rede' }, base);
+          codigo: timedOut || (e instanceof Error && e.name === 'TimeoutError') ? 'timeout' : 'rede' }, base);
       }
       if (poll) _semRede.add(`${base}|${rota}`);
       // Só falha de REDE esfria (o `isAbortError` acima já tirou o cancelamento de quem chamou).
@@ -310,25 +310,30 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server): P
   return res;
 }
 
+/** Verificação explícita: pode consultar um servidor offline, usando o mesmo registro de rede. */
+export function probeServerResponse(server: Server, path: string, init?: RequestInit): Promise<Response> {
+  return apiFetchRes(path, { signal: AbortSignal.timeout(8000), ...init }, server, true);
+}
+
 // Configurações abertas a partir da visão agregada precisam continuar no servidor capturado, sem
 // trocar o servidor global. Um 401 aqui é erro local da sheet: nunca remove a credencial ativa,
 // que pode pertencer a outra máquina.
 async function apiFetchForServer<T>(s: Server, path: string, init?: RequestInit, prazoMs = 8000): Promise<T> {
   let res: Response;
+  // Prazo por PADRAO. Esta funcao fala com OUTRO servidor, e servidor offline atras de VPN nao
+  // recusa a conexao — o socket fica pendurado e a promessa nunca resolve (o comentario do
+  // getSessions ja registrava isso pro poll). Sem prazo, abrir Configuracoes de um servidor
+  // desligado prendia a folha em "Carregando..." pra sempre, sem erro nenhum na tela.
+  // Antes do spread do `init`: quem precisar de outro prazo (ou de nenhum) passa o proprio sinal.
+  const teto = AbortSignal.timeout(prazoMs);
   try {
-    res = await apiFetchRes(path, {
-      // Prazo por PADRAO. Esta funcao fala com OUTRO servidor, e servidor offline atras de VPN nao
-      // recusa a conexao — o socket fica pendurado e a promessa nunca resolve (o comentario do
-      // getSessions ja registrava isso pro poll). Sem prazo, abrir Configuracoes de um servidor
-      // desligado prendia a folha em "Carregando..." pra sempre, sem erro nenhum na tela.
-      // Antes do spread do `init`: quem precisar de outro prazo (ou de nenhum) passa o proprio sinal.
-      signal: AbortSignal.timeout(prazoMs),
-      ...init,
-    }, s);
+    res = await apiFetchRes(path, { signal: teto, ...init }, s);
   } catch (e) {
     // "signal timed out" (o texto que o navegador poe no TimeoutError) nao diz nada pra quem le a
-    // tela. Abort pedido POR QUEM CHAMOU continua passando cru — quem cancela sabe que cancelou.
-    if (e instanceof DOMException && e.name === 'TimeoutError') {
+    // tela. O WebKit ainda entrega o estouro como AbortError "Fetch is aborted": e o NOSSO teto
+    // disparado que diz que foi tempo. Abort pedido POR QUEM CHAMOU continua passando cru — quem
+    // cancela sabe que cancelou.
+    if (e instanceof DOMException && (e.name === 'TimeoutError' || (e.name === 'AbortError' && teto.aborted))) {
       throw new Error(`${s.label} não respondeu em ${Math.round(prazoMs / 1000)}s — servidor fora do ar?`);
     }
     throw e;
@@ -390,6 +395,16 @@ export async function fetchCostsForServer(s: Server, period: string, fresco = fa
   return res.json() as Promise<Partial<CostReport>>;
 }
 
+export interface SessionCostEstimate {
+  cost_usd: number | null;
+  missing_models: string[];
+  has_usage: boolean;
+}
+
+export function getSessionCostForServer(s: Server, name: string, signal: AbortSignal): Promise<SessionCostEstimate> {
+  return apiFetchForServer(s, `/api/sessions/${encodeURIComponent(name)}/cost`, { signal }, 25_000);
+}
+
 // Só a cotação USD/BRL do servidor ativo (cache de 1h no backend). Existe à parte do /api/costs
 // porque quem mostra o custo de UMA sessão — painel, card do quadro, folha de uso — não pode
 // esperar a varredura de transcript do relatório só pra saber a taxa. null = sem cotação; quem
@@ -430,7 +445,7 @@ export async function fetchUsoForServer(s: Server, period: string, filtros: UsoF
 export class Aquecendo extends Error {
   constructor(public readonly lidos: number, public readonly total: number) {
     super(`aquecendo ${lidos}/${total}`);
-    this.name = 'Aquecendo';
+    this.name = new.target.name;
   }
 
   static async de(res: Response): Promise<Aquecendo> {
@@ -674,6 +689,14 @@ export interface BastaoResult {
   // Só quando a reescrita pelo modelo foi pedida e não deu (cota, tempo, CLI ausente): a sessão
   // nasceu com o resumo montado por código, e quem pediu tem de saber que recebeu o outro.
   aviso?: string | null;
+}
+
+// Passo em curso da criação de `name` (sessão nova ou sucessora do bastão); `step` null = nada em curso.
+export interface CreationProgress { step: string | null; params: Record<string, string> }
+
+export function getCreationProgress(name: string, server?: Server | null): Promise<CreationProgress> {
+  const path = `/api/sessions/creation-progress?name=${encodeURIComponent(name)}`;
+  return server ? apiFetchForServer(server, path) : apiFetch<CreationProgress>(path);
 }
 
 // Cria a sessão sucessora COM o dossiê: o backend monta → grava → cria → enfileira o kick-off.
@@ -1206,6 +1229,17 @@ export interface SearchHit {
   line: string;                 // trecho legivel (texto da msg) ja capado no backend
   mtime: number;
   live: boolean;
+  role?: 'user' | 'assistant' | null;  // quem escreveu a mensagem casada
+  event_id?: string | null;            // id do evento no histórico: abre a conversa no ponto
+  ts?: number | null;                  // quando a mensagem foi escrita
+}
+
+// A mensagem do trecho e as vizinhas (suas e do assistente), pra ler sem sair da busca.
+export async function getSearchContextForServer(
+  s: Server, project: string, sessionId: string, eventId: string,
+): Promise<ChatEvent[]> {
+  const q = new URLSearchParams({ project, session_id: sessionId, event_id: eventId });
+  return apiFetchForServer(s, `/api/search/context?${q}`);
 }
 
 // Busca em UM servidor (baseUrl+token explicitos), sem mexer no ativo — a UI faz fan-out por servidor
@@ -1227,9 +1261,10 @@ export async function askHistoryForServer(
 }
 
 export async function searchTranscriptsForServer(s: Server, q: string): Promise<SearchHit[]> {
+  // 30s: a busca varre as conversas de todas as contas; um termo raro percorre tudo antes de parar.
   const res = await fetch(`${s.baseUrl}/api/search?q=${encodeURIComponent(q)}`, {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
-    signal: AbortSignal.timeout(4000),
+    signal: AbortSignal.timeout(30000),
   });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json() as Promise<SearchHit[]>;
@@ -1278,6 +1313,13 @@ export async function pairSession(
   return apiFetch<PairResult>(`/api/sessions/${encodeURIComponent(name)}/pair`, {
     method: 'POST',
     body: JSON.stringify({ peers, task, replace_task: replaceTask }),
+  });
+}
+
+export function suggestGroupTask(sessions: string[]): Promise<{ task: string }> {
+  return apiFetch<{ task: string }>('/api/pair/task-suggestion', {
+    method: 'POST',
+    body: JSON.stringify({ sessions }),
   });
 }
 
@@ -1381,6 +1423,11 @@ export function reiniciarServidor(): Promise<{ ok: boolean; pid: number }> {
   return apiFetch('/api/atualizacao/reiniciar', { method: 'POST' });
 }
 
+/** O mesmo reinício, no servidor que a tela está editando (que pode não ser o ativo). */
+export function reiniciarServidorEm(s: Server | null): Promise<{ ok: boolean; pid: number }> {
+  return s ? apiFetchForServer(s, '/api/atualizacao/reiniciar', { method: 'POST' }) : reiniciarServidor();
+}
+
 /**
  * Resumo do pensamento em português, curto. Chamado quando a pessoa ABRE o bloco — nunca no
  * carregamento da conversa, porque a maioria dos pensamentos ninguém abre.
@@ -1394,8 +1441,8 @@ export function pensamentoEmPt(textos: string[]): Promise<{ textos: string[] }> 
   });
 }
 
-export function getConfigForServer(s: Server): Promise<ConfigServidor> {
-  return apiFetchForServer(s, '/api/config');
+export function getConfigForServer(s: Server, prazoMs = 8000): Promise<ConfigServidor> {
+  return apiFetchForServer(s, '/api/config', undefined, prazoMs);
 }
 
 // `somente_leitura` é opcional: backend mais antigo responde só com `campos`.
@@ -1973,6 +2020,22 @@ export async function perguntaLateral(name: string, question: string): Promise<P
 
 export async function historicoLateral(name: string): Promise<PerguntaLateral[]> {
   return apiFetch<PerguntaLateral[]>(`/api/sessions/${encodeURIComponent(name)}/btw`);
+}
+
+export interface EtapaFerramenta { t: number | null; message: string }
+
+/** Saída parcial de um Bash ainda rodando; `null` quando o comando não está (mais) em execução. */
+export async function getBashOutput(name: string, command: string): Promise<string | null> {
+  const r = await apiFetch<{ text: string | null }>(`/api/sessions/${encodeURIComponent(name)}/bash-output`, {
+    method: 'POST',
+    body: JSON.stringify({ command }),
+  });
+  return r.text;
+}
+
+export async function getToolProgress(name: string, toolUseId: string): Promise<EtapaFerramenta[]> {
+  return apiFetch<EtapaFerramenta[]>(
+    `/api/sessions/${encodeURIComponent(name)}/tool-progress/${encodeURIComponent(toolUseId)}`);
 }
 
 // Espelho do pane (overlays so-TUI): le o pane cru e manda teclas de navegacao (allowlist no backend).

@@ -13,8 +13,8 @@ SID = "11111111-1111-1111-1111-111111111111"
 
 @pytest.fixture(autouse=True)
 def _tmp_projects(tmp_path, monkeypatch):
-    # search() e archive._head_info leem settings.projects_dir -> aponta os dois pro tmp.
-    monkeypatch.setattr(search.settings, "projects_dir", tmp_path)
+    # search() varre o projects/ de cada conta; aqui só existe a do tmp.
+    monkeypatch.setattr(search, "_contas", lambda: [(None, "", tmp_path)])
     monkeypatch.setattr("app.archive.settings.projects_dir", tmp_path)
     return tmp_path
 
@@ -100,12 +100,8 @@ def test_sem_rg_no_path_avisa_uma_vez_e_devolve_vazio(tmp_path, monkeypatch, cap
 def test_query_passed_as_argv_not_shell(tmp_path, monkeypatch):
     # SEGURANCA: o rg tem que ser chamado com LISTA DE ARGUMENTOS (sem shell) e a query como VALOR de -e.
     recorded = {}
-    match_line = json.dumps({
-        "type": "match",
-        "data": {"path": {"text": str(tmp_path / "-p" / f"{SID}.jsonl")},
-                 "lines": {"text": json.dumps({"type": "user", "uuid": "u1", "cwd": "/c",
-                                               "message": {"role": "user", "content": "x; rm -rf /"}}) + "\n"}},
-    })
+    match_line = str(tmp_path / "-p" / f"{SID}.jsonl") + "\0" + json.dumps(
+        {"type": "user", "uuid": "u1", "cwd": "/c", "message": {"role": "user", "content": "x; rm -rf /"}})
 
     class _FakePopen:
         def __init__(self, argv, **kwargs):
@@ -125,9 +121,33 @@ def test_query_passed_as_argv_not_shell(tmp_path, monkeypatch):
     assert isinstance(argv, list)                       # lista de args, nao string
     assert recorded["kwargs"].get("shell") in (None, False)  # nunca shell=True
     assert "-F" in argv                                 # fixed-string (q literal, nao regex)
-    # a query vai como VALOR de -e (proximo item), literal — nunca concatenada num comando
-    assert argv[argv.index("-e") + 1] == "; rm -rf /"
+    # o termo mais longo vai como VALOR de -e (proximo item), literal — nunca concatenado num comando
+    assert argv[argv.index("-e") + 1] == "-rf"
     assert len(hits) == 1
+
+
+def test_todas_as_palavras_em_qualquer_ordem_sem_diferenciar_maiuscula(tmp_path):
+    _write(tmp_path / "-a", text="Preciso Configurar a VM do delphi amanhã")
+    _write(tmp_path / "-b", sid="22222222-2222-2222-2222-222222222222", text="configurar o delphi")
+    hits = search.search("vm configurar DELPHI", {})
+    assert [h.project for h in hits] == ["-a"]
+    assert hits[0].role == "user" and hits[0].event_id
+
+
+def test_ignora_contexto_injetado_e_resultado_de_ferramenta(tmp_path):
+    d = tmp_path / "-p"
+    d.mkdir()
+    (d / f"{SID}.jsonl").write_text("\n".join(json.dumps(o) for o in [
+        {"type": "attachment", "attachment": {"content": "needle no CLAUDE.md injetado"}},
+        {"type": "user", "uuid": "t1", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "x", "content": "needle na saída"}]}},
+    ]) + "\n", encoding="utf-8")
+    assert search.search("needle", {}) == []
+
+
+def test_ignora_conversa_interna_do_claude_p(tmp_path):
+    _write(tmp_path / "-tmp", text=search._ASK_SYSTEM + "\n\nPERGUNTA: needle")
+    assert search.search("needle", {}) == []
 
 
 # --- ask-history helpers (RAG lexical) ---------------------------------------

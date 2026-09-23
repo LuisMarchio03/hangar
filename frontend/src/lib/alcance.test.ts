@@ -2,8 +2,19 @@
 // Frases de estado da aba Acesso: a tela confia neste mapeamento tipo+estado → frase
 // (ok varia por tipo; falhou/testando/nao_configurado são fixos; não configurado é
 // neutro — não é defeito). Nenhuma rede aqui: só a função pura, e a mensagem por baixo.
-import { describe, expect, it } from 'vitest';
-import { fraseDeEstado, type EnderecoAlcance } from './alcance';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { alcanceDoServidor, fraseDeEstado, type EnderecoAlcance } from './alcance';
+import { estaDesligado, registrarFalha, _limparEsfriamentoParaTestes } from '@hangar/core';
+
+afterEach(() => { vi.restoreAllMocks(); _limparEsfriamentoParaTestes(); });
+
+it('a consulta de alcance que responde reativa o servidor', async () => {
+  const server = { id: 'delphi', label: 'Delphi', baseUrl: 'https://delphi.test', token: 'test' };
+  registrarFalha(server.id);
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ enderecos: [] })));
+  await alcanceDoServidor(server);
+  expect(estaDesligado(server.id)).toBe(false);
+});
 
 function linha(parcial: Partial<EnderecoAlcance>): EnderecoAlcance {
   return { tipo: 'rede_local', url: 'http://192.168.0.42:5173', estado: 'ok', tempo_ms: 12, ...parcial };

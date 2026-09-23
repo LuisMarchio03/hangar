@@ -927,6 +927,15 @@ def _soltar_a_vez() -> None:
     (_base() / "rodando.lock").unlink(missing_ok=True)
 
 
+def _kw_destacado() -> dict:
+    """Como o motor nasce fora do grupo de processos do backend, por sistema."""
+    if _E_WINDOWS:
+        # Grupo próprio + sem janela. O DETACHED_PROCESS que havia aqui era o que ABRIA a janela:
+        # sem console nenhum, o interpretador de base que o trampolim do venv roda alocava um.
+        return {"creationflags": _FLAGS_MOTOR_WINDOWS}
+    return {"start_new_session": True}   # setsid: sai do grupo de processos do backend
+
+
 def iniciar(porta: int = 8765) -> dict:
     """Lança a atualização fora deste processo e devolve na hora.
 
@@ -946,13 +955,7 @@ def iniciar(porta: int = 8765) -> dict:
     # exatamente a falha que este módulo existe pra não ter. O repo já resolveu isso uma vez, pelo
     # mesmo motivo: `tmux._scope_prefix()`, que envolve o servidor tmux num escopo transiente.
     args = tmux._scope_prefix() + [sys.executable, "-m", "app.atualizar", str(porta)]
-    extra: dict = {}
-    if _E_WINDOWS:
-        # Grupo próprio + sem janela. O DETACHED_PROCESS que havia aqui era o que ABRIA a janela:
-        # sem console nenhum, o interpretador de base que o trampolim do venv roda alocava um.
-        extra["creationflags"] = _FLAGS_MOTOR_WINDOWS
-    else:
-        extra["start_new_session"] = True   # setsid: sai do grupo de processos do backend
+    extra = _kw_destacado()
 
     # O estado inicial é escrito ANTES do Popen, e isso é o que impede a corrida por construção:
     # depois do lançamento, o motor já pode estar gravando `_etapa("resguardar")`, e um `_escrever`
@@ -1003,11 +1006,12 @@ def reiniciar_agora(porta: int = 8765) -> dict:
     `systemctl --user restart` mata o cgroup da unit, e quem deu o comando de dentro dele morre
     antes de o comando terminar.
 
-    Só `systemd` — nas outras topologias quem sabe derrubar e subir o servidor é o instalador, e
-    inventar um `kill` no processo de alguém seria pior que recusar.
+    `systemd` e `windows` (tarefa agendada, pelo mesmo `Restart-HangarTasks` da atualização). Na
+    instalação `manual` não há serviço, e inventar um `kill` no processo de alguém seria pior que
+    recusar.
     """
     topologia = _topologia()
-    if topologia != "systemd":
+    if topologia == "manual":
         return {"ok": False, "erro": "topologia", "topologia": topologia}
     # A mesma vez da atualização: os dois escrevem no mesmo estado.json, e um reinício por cima
     # de uma atualização em curso sobrescrevia pid/etapa dela — e, morrendo, soltava a trava dela.
@@ -1021,7 +1025,7 @@ def reiniciar_agora(porta: int = 8765) -> dict:
             tmux._scope_prefix() + [sys.executable, "-m", "app.atualizar", "--reiniciar", str(porta)],
             cwd=str(REPO / "backend"),
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True,
+            **_kw_destacado(),
         )
     except OSError:
         _soltar_a_vez()
@@ -1129,7 +1133,7 @@ def executar_reinicio(porta: int = 8765) -> None:
         _escrever(avisos=[aviso] if aviso else [])
         _avisar_sessoes()
         _etapa("reiniciar", lista=ETAPAS_REINICIO)
-        _reiniciar(_topologia())
+        _reiniciar(_topologia(), porta)
         # `ok=True` só com o servidor respondendo: a tela recarrega ao ver `ok`, e sem a prova
         # recarregava antes do novo subir.
         if not _subiu(porta):

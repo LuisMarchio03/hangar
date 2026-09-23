@@ -164,11 +164,33 @@ describe('em dia', () => {
     expect(txt).toContain('nao consegui reiniciar o servidor');
   });
 
-  it('fora do systemd não oferece botão nenhum — quem reinicia ali é o instalador', async () => {
-    // Sem isto o botão apareceria no Windows e só serviria pra devolver 409 na cara de quem clicou.
+  it('instalação manual não oferece botão nenhum — não há serviço pra reiniciar', async () => {
+    // Sem isto o botão apareceria e só serviria pra devolver 409 na cara de quem clicou.
+    vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+      base({ versoes: { repo: 'v2-novo', backend: 'v1-velho' },
+             pre_voo: { pode: true, faltando: [], topologia: 'manual' } }),
+    );
+    montar();
+    await tick();
+    await tick();
+    expect(document.body.textContent ?? '').not.toContain(m.atualizar_reiniciar_botao());
+  });
+
+  it('no Windows oferece o botão — a tarefa agendada reinicia como o systemd', async () => {
     vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
       base({ versoes: { repo: 'v2-novo', backend: 'v1-velho' },
              pre_voo: { pode: true, faltando: [], topologia: 'windows' } }),
+    );
+    montar();
+    await tick();
+    await tick();
+    expect(document.body.textContent ?? '').toContain(m.atualizar_reiniciar_botao());
+  });
+
+  it('sem topologia conhecida não oferece o botão', async () => {
+    vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+      base({ versoes: { repo: 'v2-novo', backend: 'v1-velho' },
+             pre_voo: { pode: true, faltando: [] } }),
     );
     montar();
     await tick();

@@ -43,7 +43,8 @@ def test_com_grupo_devolve_additional_context(tmp_path):
     d = json.loads(out)
     ctx = d["hookSpecificOutput"]["additionalContext"]
     assert d["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-    assert ctx.startswith("[de: hangar] GRUPO DE TRABALHO ATIVO: você ('api') trabalha junto com 'front' na tarefa: PM-9.")
+    assert ctx.startswith("[de: hangar] GRUPO DE TRABALHO ATIVO: você, 'api' (Claude Code), trabalha junto com "
+                          "'front' na tarefa: PM-9.")
     assert str(tmp_path / "grupo-g1.md") in ctx
 
 
@@ -59,7 +60,7 @@ def test_pane_ambiguo_cai_no_carimbo(tmp_path):
     (tmp_path / "b.json").write_text(json.dumps({"peers": ["c"], "task": "", "gid": "g2"}))
     bin_ = _fake_tmux(tmp_path, "%1\ta\n%1\tb\n")
     out = _run(tmp_path, {"TMUX_PANE": "%1", "CP_SESSION_NAME": "b", "PATH": f"{bin_}:{os.environ['PATH']}"})
-    assert "você ('b')" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "você, 'b' (Claude Code)," in json.loads(out)["hookSpecificOutput"]["additionalContext"]
 
 
 def test_sidecar_torto_nao_trava(tmp_path):

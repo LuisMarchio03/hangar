@@ -98,6 +98,11 @@ def list_config_dirs() -> list[ConfigDirInfo]:
     else:
         found = [p.resolve() for p in Path.home().glob(".claude*") if p.is_dir() and _is_config_dir(p)]
         found.sort(key=_projects_mtime, reverse=True)
+        # A base do app entra mesmo deslogada: numa máquina nova ela é a primeira conta, e sem ela
+        # a aba Contas só oferecia criar uma `~/.claude-<nome>`, deixando o `claude` do terminal
+        # (que usa a base) preso na tela de boas-vindas.
+        if active_base not in found:
+            found.insert(0, active_base)
         entries = [(_label_for(p), p) for p in found]
     # Apelido da aba Contas (id `claude:<path>`) vence o nome derivado do disco — é o mesmo nome
     # que a faixa de cota e a lista de contas mostram. Import local só porque apenas esta função

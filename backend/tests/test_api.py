@@ -659,7 +659,8 @@ def test_codex_modo_e_skills_usam_adapter_nativo(api_client):
         assert api_client.post("/api/sessions/cx/codex/mode", headers=_h(), json={"mode": "bypassPermissions"}).status_code == 422
         skills = api_client.get("/api/sessions/cx/commands", headers=_h()).json()
     fake.set_mode.assert_awaited_once_with("cx", "plan")
-    assert skills == [{"name": "revisar", "display": "/revisar", "source": "skill"}]
+    assert skills[0]["name"] == "compact" and skills[0]["source"] == "builtin"
+    assert skills[1:] == [{"name": "revisar", "display": "/revisar", "source": "skill"}]
 
 
 def test_codex_orientar_texto_ou_fila_com_falha_visivel(api_client):
@@ -3173,9 +3174,9 @@ def test_pair_protocolo_completo_so_pro_novato(api_client):
         r = api_client.post("/api/sessions/d/pair", headers=_h(), json={"peers": ["a"], "task": ""})
     assert r.status_code == 200
     assert entregues["d"].startswith("[de: hangar] GRUPO DE TRABALHO ATIVO")
-    assert entregues["a"].startswith("[de: hangar] 'd' entrou no seu grupo")
-    assert entregues["b"].startswith("[de: hangar] 'd' entrou no seu grupo")
-    assert "Membros agora: 'a', 'b', 'd'" in entregues["a"]
+    assert entregues["a"].startswith("[de: hangar] 'd' (Claude Code) entrou no seu grupo")
+    assert entregues["b"].startswith("[de: hangar] 'd' (Claude Code) entrou no seu grupo")
+    assert "Membros agora: 'a' (Claude Code), 'b' (Claude Code), 'd' (Claude Code)" in entregues["a"]
 
 
 def test_pair_repetido_sem_mudanca_nao_avisa_ninguem(api_client):
@@ -3212,8 +3213,9 @@ def test_pair_merge_de_dois_grupos_avisa_entrada_dos_dois_lados(api_client):
          patch("app.api._deliver", side_effect=fake_deliver):
         r = api_client.post("/api/sessions/a/pair", headers=_h(), json={"peers": ["c"], "task": ""})
     assert r.status_code == 200
-    assert "'c', 'd' entrou" in entregues["a"] and "'c', 'd' entrou" in entregues["b"]
-    assert "'a', 'b' entrou" in entregues["c"] and "'a', 'b' entrou" in entregues["d"]
+    cd, ab = "'c' (Claude Code), 'd' (Claude Code) entrou", "'a' (Claude Code), 'b' (Claude Code) entrou"
+    assert cd in entregues["a"] and cd in entregues["b"]
+    assert ab in entregues["c"] and ab in entregues["d"]
 
 
 # ---------------------------------------------------------------------------
@@ -3291,16 +3293,17 @@ def test_group_estourou_esquece_fora_da_janela(monkeypatch):
 # Task 6: --group respeita o caminho nativo
 # ---------------------------------------------------------------------------
 
-def test_group_message_pula_peers_com_socket_quando_remetente_e_nativo(api_client):
+def test_group_message_nao_pula_ninguem_quando_remetente_e_nativo(api_client):
+    # `remetente_nativo` não tira ninguém da entrega: `pulados` fica vazio e cada membro passa
+    # pela escada do backend (aqui, sem sessão headless nem socket, todos caem no tmux).
     with patch("app.api.PairLink.get", return_value={"peers": ["b", "c"], "task": "", "gid": "g1"}), \
-         patch("app.registry.inbox_socket_of", side_effect=lambda n: "/run/b.sock" if n == "b" else None), \
          patch("app.api.terminal.send_prompt", return_value="sent") as sp, \
          patch("app.pqueue.PromptQueue.append"):
         r = api_client.post("/api/sessions/a/group-message",
                             json={"text": "terminei", "remetente_nativo": True}, headers=_h())
     assert r.status_code == 200
-    assert r.json()["pulados"] == ["b"]
-    assert [c.args[0] for c in sp.call_args_list] == ["c"]
+    assert r.json()["pulados"] == []
+    assert sorted(c.args[0] for c in sp.call_args_list) == ["b", "c"]
 
 
 def test_group_message_forcar_tmux_entrega_a_todos(api_client):

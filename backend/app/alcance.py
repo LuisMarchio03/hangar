@@ -158,18 +158,36 @@ def levantar_estados(s: Settings) -> dict:
     """
     bind = resolve_bind_ip(s)
     loopback = bind in _LOOPBACK_ONLY
+    # Duas portas podem servir a interface: a do serviço separado do front (`front_port`, quando
+    # existe) e a do próprio backend, que serve o `dist`. Testar SÓ a primeira acusava de "não
+    # responde" uma máquina em que o app abre normalmente pela segunda — o caso de quem não sobe o
+    # serviço do front. A linha mostra a PRIMEIRA DA LISTA que respondeu — a porta do front tem
+    # precedência —, não a que respondeu mais rápido.
+    portas = [porta_do_front(s)]
+    if s.port not in portas:
+        portas.append(s.port)
     enderecos: list[dict] = []
     if loopback:
-        enderecos.append({"tipo": "nesta_maquina", "url": f"http://{bind}:{porta_do_front(s)}"})
-    enderecos.append({"tipo": "rede_local", "url": f"http://{_detectar_lan()}:{porta_do_front(s)}"})
+        enderecos.append({"tipo": "nesta_maquina", "urls": [f"http://{bind}:{p}" for p in portas]})
+    lan = _detectar_lan()
+    enderecos.append({"tipo": "rede_local", "urls": [f"http://{lan}:{p}" for p in portas]})
     nome_ts = _nome_tailscale()
     if nome_ts:
-        enderecos.append({"tipo": "tailscale", "url": f"https://{nome_ts}"})
-    enderecos.append({"tipo": "publico", "url": s.public_url.rstrip("/") if s.public_url else ""})
-    with ThreadPoolExecutor(max_workers=len(enderecos)) as pool:
-        futuros = {e["tipo"]: pool.submit(testar_endereco, e["url"]) for e in enderecos}
+        enderecos.append({"tipo": "tailscale", "urls": [f"https://{nome_ts}"]})
+    enderecos.append({"tipo": "publico", "urls": [s.public_url.rstrip("/")] if s.public_url else [""]})
+    with ThreadPoolExecutor(max_workers=sum(len(e["urls"]) for e in enderecos)) as pool:
+        futuros = {
+            (e["tipo"], u): pool.submit(testar_endereco, u)
+            for e in enderecos for u in e["urls"]
+        }
         for e in enderecos:
-            e.update(futuros[e["tipo"]].result())
+            tentativas = [(u, futuros[(e["tipo"], u)].result()) for u in e["urls"]]
+            # Nenhuma respondeu: a linha mostra o endereço do SERVIÇO (a última candidata), que é o
+            # que teria de abrir — e não a porta da tela, que nem está de pé nessa máquina.
+            url, resultado = next((t for t in tentativas if t[1]["estado"] == "ok"), tentativas[-1])
+            e.pop("urls")
+            e["url"] = url
+            e.update(resultado)
     return {"loopback": loopback, "bind": bind, "enderecos": enderecos}
 
 

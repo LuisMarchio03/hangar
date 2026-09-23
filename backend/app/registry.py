@@ -118,7 +118,32 @@ def _decorate_plan(info) -> None:
 
 
 def sanitize_cwd(cwd: str) -> str:
-    return re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    # O Claude indexa pelo cwd sem separador final ("/home/x/" e "C:\\x\\" caem em "-home-x" e
+    # "C--x"); só a raiz ("/", "C:\\") mantém o seu.
+    limpo = cwd.rstrip("/\\")
+    if not limpo or limpo.endswith(":"):
+        limpo = cwd
+    return re.sub(r"[^A-Za-z0-9]", "-", limpo)
+
+
+def cwd_atual(meta: dict) -> str | None:
+    """Pasta de uma sessão sem terminal. Renomeada com a sessão viva, o caminho gravado aponta pro
+    nada, mas o processo continua dentro dela e o /proc mostra o nome novo. O transcript segue no
+    caminho gravado: é por ele que o Claude indexa a conversa."""
+    cwd = meta.get("cwd")
+    pid = (meta.get("cano") or {}).get("pid")
+    chave = meta.get("key") or ""
+    if not cwd or os.path.isdir(cwd) or not pid or not chave:
+        return cwd
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            if chave[:16].encode() not in fh.read():
+                return cwd   # pid reaproveitado por outro processo
+        vivo = os.readlink(f"/proc/{pid}/cwd")
+    except OSError as e:
+        _log.debug("cwd_atual: sem pasta viva de %s (pid %s): %s", meta.get("name"), pid, e)
+        return cwd
+    return vivo if os.path.isdir(vivo) else cwd
 
 
 _pretrust_lock = threading.Lock()
@@ -1247,9 +1272,10 @@ class SessionRegistry:
         for meta in codex_sessions.list_all():
             codex_home = str(Path(meta.get("codex_home") or codex_contas.default_home())
                              .expanduser().resolve(strict=False))
-            br, wt = head_info(meta.get("cwd"))
+            cwd = cwd_atual(meta)
+            br, wt = head_info(cwd)
             out.append(SessionInfo(
-                name=meta["name"], cwd=meta.get("cwd"), jsonl=meta.get("rollout_path") or None,
+                name=meta["name"], cwd=cwd, jsonl=meta.get("rollout_path") or None,
                 provider="codex", tracked=True, conta=f"codex:{codex_home}",
                 codex_home=codex_home, headless=bool(meta.get("headless")),
                 branch=br, worktree=wt,
@@ -1263,10 +1289,11 @@ class SessionRegistry:
         from app.adapters import get_adapter, CLAUDE_HEADLESS
         hl = get_adapter(CLAUDE_HEADLESS)
         for meta in headless_sessions.list_all():
-            br, wt = head_info(meta.get("cwd"))
+            cwd = cwd_atual(meta)
+            br, wt = head_info(cwd)
             cdir = meta.get("config_dir")
             out.append(SessionInfo(
-                name=meta["name"], cwd=meta.get("cwd"), jsonl=hl.transcript_path_de(meta),
+                name=meta["name"], cwd=cwd, jsonl=hl.transcript_path_de(meta),
                 provider="claude", headless=True, tracked=True, engine=meta.get("engine"),
                 conta=f"claude:{Path(cdir or Path.home() / '.claude').resolve()}",
                 branch=br, worktree=wt,
@@ -1368,10 +1395,8 @@ class SessionRegistry:
         pending = []  # infos sem marcador (ou awaiting) -> precisa raspar o pane
         pendente_sem_thread = []  # Codex antes da thread -> raspa o pane SO pra achar menu
         for info in infos:
-            # Codex: le o marcador como os outros, mas NUNCA raspa o pane. A TUI dele nao tem regua
-            # nem caixa de composer, entao `classify` devolveria as duas ultimas linhas verbatim —
-            # viraria uma segunda statusline, pior que a que o adapter ja monta. Sem marcador nao
-            # ha fallback nenhum: fica o default idle (ou o aviso de hooks, logo abaixo).
+            # Codex compartilha o estado nativo com o chat; o hook cobre conexões indisponíveis.
+            # Nunca classifica o pane: a TUI não tem a régua/composer usados pelo Claude.
             if getattr(info, "provider", "claude") == "codex":
                 info.last_activity = _jsonl_mtime(info.jsonl)
                 if not info.jsonl:
@@ -1391,28 +1416,31 @@ class SessionRegistry:
                     if not info.headless:
                         pendente_sem_thread.append(info)
                     continue
+                codex = get_adapter("codex")
+                snapshot = codex.snapshot(info.name, _sid(info.jsonl))
                 marker = hook_state.get_state(_sid(info.jsonl))
-                if marker and marker[0] != "awaiting_input":
+                if snapshot is not None:
+                    info.state, info.label = snapshot.state, snapshot.label
+                elif marker and marker[0] != "awaiting_input":
                     # awaiting_input nao existe no Codex (o evento equivalente nao existe la); se
                     # aparecer, e marcador de outra coisa e nao vale mais que o default.
                     info.state = marker[0]
-                    if marker[0] != "working":
-                        self._label_cache.pop(info.name, None)
                 elif await asyncio.to_thread(codex_turno_aberto, info.jsonl):
                     # Turno andando no rollout e marcador nenhum = o hook nao esta rodando, e a
                     # unica causa conhecida e hook nao aprovado na TUI do Codex. Dizer isso e o que
                     # torna visivel o unico modo de falha deste desenho — calado, a sessao ficaria
                     # eternamente "ociosa" enquanto trabalha.
                     info.problema = "codex_hooks_nao_aprovados"
-                from app.adapters import get_adapter
-                info.pending_questions, info.question = get_adapter("codex").async_question_status(info.name)
+                if info.state != "working":
+                    self._label_cache.pop(info.name, None)
+                info.pending_questions, info.question = codex.async_question_status(info.name)
                 if info.pending_questions and info.state == "idle":
                     info.state = "awaiting_input"
                 if info.headless:
-                    pergunta, opcoes = get_adapter("codex").aprovacao_pendente(info.name)
+                    pergunta, opcoes = codex.aprovacao_pendente(info.name)
                     if pergunta:
                         info.state, info.question, info.options = "awaiting_input", pergunta, opcoes
-                    info.problema = get_adapter("codex").problema_de(info.name) or info.problema
+                    info.problema = codex.problema_de(info.name) or info.problema
                 continue
             if getattr(info, "headless", False):
                 # Claude sem terminal: NUNCA raspa pane (não há). Processo vivo responde pelo

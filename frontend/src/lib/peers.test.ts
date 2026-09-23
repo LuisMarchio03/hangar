@@ -2,6 +2,7 @@
 // mascarado em si é contrato do backend (test_peers_api.py) — aqui se prova a borda do cliente.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Server } from './auth';
+import { estaDesligado, registrarFalha, _limparEsfriamentoParaTestes } from '@hangar/core';
 
 const store = new Map<string, string>();
 (globalThis as any).localStorage = {
@@ -20,11 +21,28 @@ const { listServers, getActiveId } = await import('./auth');
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  _limparEsfriamentoParaTestes();
   store.set('cp_servers', JSON.stringify([ativo]));
   store.set('cp_active', ativo.id);
 });
 
 describe('cliente de peers', () => {
+  it.each([200, 401])('resposta HTTP %s do remoto retira a marca de desligado sem esconder erro', async (status) => {
+    const remote = { id: 'delphi', label: 'Delphi', baseUrl: 'https://delphi.test', token: 'test' };
+    registrarFalha(remote.id);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
+      JSON.stringify(status === 200 ? { identificador: 'delphi' } : { detail: 'recusado' }), { status }));
+    if (status === 200) expect(await getIdentificador(remote)).toEqual({ identificador: 'delphi' });
+    else await expect(getIdentificador(remote)).rejects.toThrow('recusado');
+    expect(estaDesligado(remote.id)).toBe(false);
+  });
+
+  it('falha de rede na verificação marca o remoto desligado', async () => {
+    const remote = { id: 'delphi', label: 'Delphi', baseUrl: 'https://delphi.test', token: 'test' };
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('sem rede'));
+    await expect(getIdentificador(remote)).rejects.toThrow('sem rede');
+    expect(estaDesligado(remote.id)).toBe(true);
+  });
   it('listar usa o servidor ativo e o Bearer do app', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify([{ id: 'notebook', base_url: 'http://n:8765', token: '••••reto' }]), { status: 200 }),

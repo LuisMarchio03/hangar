@@ -2,13 +2,14 @@
 transporte fake em memoria (sem spawnar o binario `codex` real, ver docs/codex-app-server-contract.md)."""
 import asyncio
 import json
+import logging
 import os
 import shutil
 
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from app.adapters.codex.appserver import _READ_LIMIT, AppServerClient
+from app.adapters.codex.appserver import _MAX_FALHAS_LEITURA, _READ_LIMIT, AppServerClient
 
 
 class _FakeWriter:
@@ -96,6 +97,83 @@ async def test_pending_request_rejected_on_stream_eof():
         await req_task
 
     await client.close()
+
+
+class _ContadorDeLogs(logging.Handler):
+    """Conta registros e ABORTA depois do teto. Sem isto, a regressao (laco quente que nunca cede o
+    event loop) travaria a suite pra sempre em vez de falhar: nenhum timeout async chega a rodar."""
+
+    def __init__(self, teto: int) -> None:
+        super().__init__()
+        self.total = 0
+        self._teto = teto
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.total += 1
+        if self.total >= self._teto:
+            raise _LacoQuente(f"read loop girou {self.total} vezes sem ceder o event loop")
+
+
+class _LacoQuente(Exception):
+    pass
+
+
+async def test_transport_error_on_read_ends_loop_instead_of_spinning():
+    """Cano fechado no Windows chega como ConnectionResetError, nao como EOF - e o StreamReader
+    relevanta essa MESMA excecao em toda leitura seguinte, sem suspender. Se o loop tratar isso como
+    erro de linha e continuar, gira quente: nao cede o event loop (backend inteiro sem resposta), nao
+    aceita cancel, e o traceback cresce a cada relevantada. Erro de transporte tem que encerrar."""
+    contador = _ContadorDeLogs(teto=50)
+    logger_alvo = logging.getLogger("app.adapters.codex.appserver")
+    logger_alvo.addHandler(contador)
+    try:
+        writer = _FakeWriter()
+        reader = _fake_reader()
+        client = _client_with(reader, writer)
+
+        req_task = asyncio.create_task(client.request("m", {}))
+        await asyncio.sleep(0)
+        reader.set_exception(ConnectionResetError(64, "O nome da rede nao esta mais disponivel"))
+
+        # o loop encerra sozinho: task termina, pendentes destravam e a morte e sinalizada
+        await asyncio.wait_for(client._reader_task, timeout=2)
+        with pytest.raises(ConnectionError):
+            await req_task
+        assert client.closed is True
+        assert contador.total < 50, "erro de transporte foi logado em laco"
+    finally:
+        logger_alvo.removeHandler(contador)
+
+    await client.close()
+
+
+async def test_recoverable_read_errors_stop_at_the_cap():
+    """Erro de leitura recuperavel (linha > _READ_LIMIT vira ValueError depois de drenar o buffer)
+    segue adiante, mas nao pra sempre: se a leitura nunca andar, o teto encerra o loop."""
+
+    class _ReaderSempreValueError(asyncio.StreamReader):
+        def __init__(self) -> None:
+            super().__init__()
+            self.tentativas = 0
+
+        async def readline(self) -> bytes:
+            self.tentativas += 1
+            raise ValueError("Separator is not found, and chunk exceed the limit")
+
+    contador = _ContadorDeLogs(teto=_MAX_FALHAS_LEITURA + 2)
+    logger_alvo = logging.getLogger("app.adapters.codex.appserver")
+    logger_alvo.addHandler(contador)
+    try:
+        reader = _ReaderSempreValueError()
+        client = _client_with(reader, _FakeWriter())
+
+        await asyncio.wait_for(client._reader_task, timeout=2)
+        assert reader.tentativas == _MAX_FALHAS_LEITURA
+        assert client.closed is True
+
+        await client.close()
+    finally:
+        logger_alvo.removeHandler(contador)
 
 
 async def test_oversized_line_processed_and_reader_stays_alive():

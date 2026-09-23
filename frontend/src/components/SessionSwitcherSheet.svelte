@@ -6,8 +6,9 @@ import * as m from '../paraglide/messages';
   import BackgroundToggle from './BackgroundToggle.svelte';
   import { basename, relativeTime, rotuloEstado, stateColors } from '@hangar/core';
   import { listServers, selectServer, serverColor, getActiveId } from '../lib/auth';
-  import { searchTranscriptsForServer, askHistoryForServer, type SearchHit } from '@hangar/core';
-  import type { SessionInfo, State } from '@hangar/core';
+  import { searchTranscriptsForServer, askHistoryForServer, getSearchContextForServer, type SearchHit } from '@hangar/core';
+  import type { ChatEvent, SessionInfo, State } from '@hangar/core';
+  import { renderMarkdown } from '../lib/markdown';
 
   // Troca de sessao sem voltar pra home. Dois modos: "sessoes" (lista das outras sessoes vivas +
   // "Nova sessão") e "conversas" (busca de CONTEUDO em todos os transcripts, vivos + arquivados,
@@ -39,6 +40,57 @@ import * as m from '../paraglide/messages';
   let results = $state<Hit[]>([]);
   let searching = $state(false);
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  // Servidores que falharam na última busca: sem isto a falha virava "Nenhum resultado".
+  let falhas = $state<string[]>([]);
+
+  const termosBusca = $derived([...new Set(query.trim().toLowerCase().split(/\s+/).filter(Boolean))]);
+  const escapar = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  function destacar(texto: string, termos: string[]): { t: string; hit: boolean }[] {
+    if (!termos.length) return [{ t: texto, hit: false }];
+    const re = new RegExp(`(${termos.map(escapar).join('|')})`, 'gi');
+    return texto.split(re).filter(Boolean).map((t) => ({ t, hit: termos.includes(t.toLowerCase()) }));
+  }
+
+  // Um bloco por conversa, na ordem dos resultados (mais recente primeiro).
+  const grupos = $derived.by(() => {
+    const porConversa = new Map<string, Hit[]>();
+    for (const h of results) {
+      const k = `${h.serverId}/${h.session_id}`;
+      porConversa.set(k, [...(porConversa.get(k) ?? []), h]);
+    }
+    return [...porConversa.entries()].map(([chave, hits]) => ({ chave, hits }));
+  });
+  const resumoBusca = $derived(
+    `${results.length === 1 ? m.busca_um_trecho() : m.busca_n_trechos({ n: String(results.length) })} · ${
+      grupos.length === 1 ? m.busca_uma_conversa() : m.busca_n_conversas({ n: String(grupos.length) })}`,
+  );
+
+  // Prévia: o trecho aberto mostra a mensagem inteira e as vizinhas, sem sair da busca.
+  const chaveHit = (h: Hit) => `${h.serverId}/${h.session_id}/${h.event_id ?? h.line}`;
+  let aberto = $state<string | null>(null);
+  let contexto = $state<ChatEvent[] | null>(null);
+  let contextoErro = $state('');
+  async function alternarPrevia(h: Hit) {
+    const k = chaveHit(h);
+    if (aberto === k) { aberto = null; return; }
+    aberto = k;
+    contexto = null;
+    contextoErro = '';
+    const srv = listServers().find((s) => s.id === h.serverId);
+    if (!srv || !h.event_id) { contextoErro = m.busca_contexto_indisponivel(); return; }
+    try {
+      const evs = await getSearchContextForServer(srv, h.project, h.session_id, h.event_id);
+      if (aberto === k) contexto = evs;
+    } catch (e) {
+      if (aberto === k) contextoErro = e instanceof Error ? e.message : m.busca_contexto_indisponivel();
+    }
+  }
+  function abrirNoPonto(h: Hit) {
+    selectServer(h.serverId);
+    onClose();
+    const seg = [h.serverId, h.project, h.session_id, ...(h.event_id ? [h.event_id] : [])];
+    window.location.hash = '#/archive/' + seg.map(encodeURIComponent).join('/');
+  }
 
   // "Perguntar" (RAG lexical): claude -p no backend responde onde o assunto apareceu.
   // v1 roda SO no servidor ativo (cross-server fica pra v2 — decisao anotada no contrato).
@@ -70,6 +122,7 @@ import * as m from '../paraglide/messages';
       mode = searchOnly ? 'search' : 'sessions';   // modo busca abre direto na busca
       query = '';
       results = [];
+      falhas = []; aberto = null;
       askAnswer = null; askErr = ''; asking = false;
       activeIdx = 0;
       // espera o sheet montar/animar antes de focar
@@ -101,6 +154,7 @@ import * as m from '../paraglide/messages';
     clearTimeout(searchTimer);
     if (!term) {
       results = [];
+      falhas = [];
       searching = false;
       return;
     }
@@ -117,13 +171,18 @@ import * as m from '../paraglide/messages';
     // Resultado velho: a query mudou (ou trocou de modo) enquanto o fetch voltava -> descarta.
     if (term !== query.trim() || mode !== 'search') return;
     const merged: Hit[] = [];
+    const falharam: string[] = [];
     settled.forEach((r, i) => {
       if (r.status === 'fulfilled') {
         for (const h of r.value) merged.push({ ...h, serverId: servers[i].id, serverLabel: servers[i].label });
+      } else {
+        falharam.push(servers[i].label);
       }
     });
     merged.sort((a, b) => b.mtime - a.mtime); // mais recente primeiro
     results = merged;
+    falhas = falharam;
+    aberto = null;
     searching = false;
   }
 
@@ -135,16 +194,10 @@ import * as m from '../paraglide/messages';
     return h.project;
   }
 
-  function tapHit(h: Hit) {
+  function abrirSessao(h: Hit) {
+    if (!h.session_name) return;
     selectServer(h.serverId); // toda navegacao seguinte mira o servidor dono do hit
-    if (h.live && h.session_name) {
-      onPick(h.session_name); // sessao viva -> abre o chat (Chat.pickSession fecha o sheet + navega)
-    } else {
-      // Conversa morta -> abre o leitor do Arquivo naquele transcript (deep-link no hash; o App rota).
-      onClose();
-      const seg = [h.serverId, h.project, h.session_id].map(encodeURIComponent).join('/');
-      window.location.hash = '#/archive/' + seg;
-    }
+    onPick(h.session_name);   // Chat.pickSession fecha o sheet + navega
   }
 
   const urgency: Record<State, number> = {
@@ -198,7 +251,8 @@ import * as m from '../paraglide/messages';
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel={searchOnly ? m.lista_buscar() : m.sessao_trocar_de()} centered={desktop.atual}>
+<BottomSheet {open} {onClose} ariaLabel={searchOnly ? m.lista_buscar() : m.sessao_trocar_de()} centered={desktop.atual}
+             largura={mode === 'search' ? 760 : undefined}>
   <h2 class="sheet-title">{searchOnly ? m.lista_buscar() : m.lista_titulo()}</h2>
 
   <!-- Alterna entre trocar de sessao (vivas) e buscar conteudo em todas as conversas (feature #10).
@@ -243,47 +297,36 @@ import * as m from '../paraglide/messages';
     {#if askAnswer}
       <div class="ask-card">
         <p class="ask-answer">{askAnswer.answer}</p>
-        {#each askAnswer.hits as h (h.project + '/' + h.session_id + '/' + h.line)}
-          <button class="row row--hit" onclick={() => tapHit(h)}>
-            <span class="row-main">
-              <span class="hit-snippet">{h.line}</span>
-              <span class="hit-meta">
-                <span class="hit-folder">{folderShort(h)}</span>
-                <span class="sep">·</span>
-                <span class:live={h.live}>{h.live ? m.switcher_ativa() : m.switcher_arquivo()}</span>
-              </span>
-            </span>
-            <span class="chev" aria-hidden="true">›</span>
-          </button>
-        {/each}
+        {#each askAnswer.hits as h (chaveHit(h))}{@render trecho(h, true)}{/each}
       </div>
     {/if}
-    <div class="list">
+    <div class="list" aria-busy={searching}>
+      {#each falhas as f (f)}<p class="ask-err" role="alert">{m.busca_servidor_falhou({ servidor: f })}</p>{/each}
       {#if !query.trim()}
         <p class="empty">{m.busca_digite_todas()}</p>
       {:else if searching}
-        <p class="empty">{m.switcher_buscando()}</p>
+        <p class="empty" role="status">{m.switcher_buscando()}</p>
       {:else if results.length === 0}
-        <p class="empty">{m.busca_nenhum_resultado()}</p>
+        {#if !falhas.length}<p class="empty">{m.busca_nenhum_todas({ termos: termosBusca.join(', ') })}</p>{/if}
       {:else}
-        {#each results as h (h.serverId + '/' + h.project + '/' + h.session_id)}
-          <button class="row row--hit" onclick={() => tapHit(h)}>
-            <span class="row-main">
-              <span class="hit-snippet">{h.line}</span>
+        <p class="busca-resumo" role="status">{resumoBusca}</p>
+        {#each grupos as g (g.chave)}
+          {@const h0 = g.hits[0]}
+          <section class="grupo">
+            <header class="grupo-cab">
+              {#if multiServer}
+                <span class="srv-dot" style="background: {serverColor(h0.serverId)};" aria-hidden="true"></span>
+              {/if}
+              <span class="grupo-nome">{h0.live && h0.session_name ? h0.session_name : folderShort(h0)}</span>
               <span class="hit-meta">
-                {#if multiServer}
-                  <span class="srv-dot" style="background: {serverColor(h.serverId)};" aria-hidden="true"></span>
-                  <span class="srv-label">{h.serverLabel}</span>
-                  <span class="sep">·</span>
-                {/if}
-                <span class="hit-folder">{folderShort(h)}</span>
-                <span class="sep">·</span>
-                <span class:live={h.live}>{h.live ? m.switcher_ativa() : m.switcher_arquivo()}</span>
-                {#if h.mtime}<span class="sep">·</span><span>{relativeTime(h.mtime)}</span>{/if}
+                {#if multiServer}<span>{h0.serverLabel}</span><span class="sep">·</span>{/if}
+                {#if h0.live && h0.session_name && h0.session_name !== folderShort(h0)}<span class="hit-folder">{folderShort(h0)}</span><span class="sep">·</span>{/if}
+                <span class:live={h0.live}>{h0.live ? m.switcher_ativa() : m.switcher_arquivo()}</span>
+                {#if h0.mtime}<span class="sep">·</span><span>{relativeTime(h0.mtime)}</span>{/if}
               </span>
-            </span>
-            <span class="chev" aria-hidden="true">›</span>
-          </button>
+            </header>
+            {#each g.hits as h (chaveHit(h))}{@render trecho(h, false)}{/each}
+          </section>
         {/each}
       {/if}
     </div>
@@ -330,15 +373,57 @@ import * as m from '../paraglide/messages';
   <p class="kbd-hint" aria-hidden="true">{m.busca_atalhos()}</p>
   {/if}
 
-  <div class="theme-row">
-    <span class="theme-label">{m.config_tema_curto()}</span>
-    <ThemeToggle />
-  </div>
-  <div class="theme-row">
-    <span class="theme-label">{m.config_fundo_curto()}</span>
-    <BackgroundToggle />
-  </div>
+  {#if mode !== 'search'}
+    <div class="theme-row">
+      <span class="theme-label">{m.config_tema_curto()}</span>
+      <ThemeToggle />
+    </div>
+    <div class="theme-row">
+      <span class="theme-label">{m.config_fundo_curto()}</span>
+      <BackgroundToggle />
+    </div>
+  {/if}
 </BottomSheet>
+
+{#snippet trecho(h: Hit, comPasta: boolean)}
+  {@const k = chaveHit(h)}
+  <div class="hit" class:hit--aberto={aberto === k}>
+    <button class="hit-btn" onclick={() => alternarPrevia(h)} aria-expanded={aberto === k}>
+      <span class="hit-cab">
+        <span class="hit-quem" class:hit-quem--voce={h.role === 'user'}>
+          {h.role === 'user' ? m.busca_voce() : m.busca_assistente()}
+        </span>
+        {#if comPasta}<span class="hit-folder">{h.live && h.session_name ? h.session_name : folderShort(h)}</span>{/if}
+        {#if h.ts}<span class="hit-quando">{relativeTime(h.ts)}</span>{/if}
+      </span>
+      <span class="hit-snippet">{#each destacar(h.line, termosBusca) as p, i (i)}{#if p.hit}<mark>{p.t}</mark>{:else}{p.t}{/if}{/each}</span>
+    </button>
+    {#if aberto === k}
+      <div class="previa">
+        {#if contextoErro}
+          <p class="ask-err" role="alert">{contextoErro}</p>
+        {:else if !contexto}
+          <p class="empty" role="status">{m.busca_carregando_contexto()}</p>
+        {:else}
+          {#each contexto as ev (ev.id)}
+            <div class="previa-msg" class:previa-msg--alvo={ev.id === h.event_id}>
+              <span class="hit-quem" class:hit-quem--voce={ev.kind === 'user_msg'}>
+                {ev.kind === 'user_msg' ? m.busca_voce() : m.busca_assistente()}
+              </span>
+              <div class="md">{@html renderMarkdown(ev.text ?? '')}</div>
+            </div>
+          {/each}
+        {/if}
+        <div class="previa-acoes">
+          <button class="previa-btn" onclick={() => abrirNoPonto(h)}>{m.busca_abrir_ponto()}</button>
+          {#if h.live && h.session_name}
+            <button class="previa-btn previa-btn--sec" onclick={() => abrirSessao(h)}>{m.busca_abrir_sessao()}</button>
+          {/if}
+        </div>
+      </div>
+    {/if}
+  </div>
+{/snippet}
 
 <style>
   .sheet-title {
@@ -374,21 +459,109 @@ import * as m from '../paraglide/messages';
     box-shadow: inset 0 0 0 1px var(--border-default);
   }
 
-  /* Linha de resultado da busca de conteudo */
-  .row--hit {
-    align-items: flex-start;
-    padding-top: var(--space-3);
-    padding-bottom: var(--space-3);
+  /* Resultados da busca de conteúdo: um bloco por conversa, um trecho por mensagem casada. */
+  .busca-resumo {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    padding: 0 var(--space-1) var(--space-1);
   }
+  .grupo {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--space-2) 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .grupo:first-of-type { border-top: 0; }
+  .grupo-cab {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    padding: 0 var(--space-2) var(--space-1);
+    min-width: 0;
+  }
+  .grupo-nome {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+  }
+  .hit { border-radius: var(--radius-md); }
+  .hit--aberto { background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--border-subtle); }
+  .hit-btn {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 3px;
+    padding: var(--space-2);
+    text-align: left;
+    background: transparent;
+    border-radius: var(--radius-md);
+  }
+  .hit-btn:hover { background: var(--bg-hover); }
+  .hit-cab {
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    min-width: 0;
+  }
+  .hit-quem {
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  .hit-quem--voce { color: var(--accent); }
+  .hit-quando { margin-left: auto; flex-shrink: 0; }
   .hit-snippet {
     font-size: var(--text-sm);
+    line-height: 1.45;
     color: var(--text-primary);
     display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
+  .hit-snippet mark {
+    background: var(--accent-dim);
+    color: var(--text-primary);
+    border-radius: 3px;
+    padding: 0 2px;
+  }
+  .previa {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3) var(--space-3);
+  }
+  .previa-msg {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-left: var(--space-3);
+    border-left: 2px solid var(--border-subtle);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+  }
+  .previa-msg--alvo { border-left-color: var(--accent); color: var(--text-primary); }
+  .previa-acoes { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+  .previa-btn {
+    height: 34px;
+    padding: 0 var(--space-3);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    background: var(--accent);
+    color: #fff;
+  }
+  .previa-btn--sec { background: var(--bg-hover); color: var(--text-primary); }
   .hit-meta {
     display: flex;
     align-items: center;
@@ -411,11 +584,6 @@ import * as m from '../paraglide/messages';
     height: 7px;
     border-radius: var(--radius-full);
     flex-shrink: 0;
-  }
-  .chev {
-    color: var(--text-muted);
-    flex-shrink: 0;
-    align-self: center;
   }
 
   .theme-row {

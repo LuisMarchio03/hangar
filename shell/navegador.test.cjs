@@ -1,6 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { uaDeChrome, normalizaBounds, urlNavegavel, nomeSidecar, proximaAtiva } = require('./navegador.cjs');
+const { uaDeChrome, normalizaBounds, urlNavegavel, nomeSidecar, proximaAtiva, hostLoopback } = require('./navegador.cjs');
+
+test('hostLoopback aceita só loopback de verdade', () => {
+  for (const h of ['localhost', 'LOCALHOST', '127.0.0.1', '127.1.2.3', '::1', '[::1]']) assert.equal(hostLoopback(h), true, h);
+  for (const h of ['localhost.exemplo.com', '127.0.0.1.nip.io', '10.0.0.1', '128.0.0.1', '127.0.0.256', 'exemplo.com', '', null]) {
+    assert.equal(hostLoopback(h), false, String(h));
+  }
+});
 
 test('uaDeChrome remove marcas de app e vira Chrome vanilla', () => {
   const ua = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) hangar/0.1.3 Chrome/142.0.0.0 Electron/43.3.0 Safari/537.36 hangar-shell';

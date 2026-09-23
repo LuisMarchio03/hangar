@@ -236,6 +236,8 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
 - **Aba ativa do navegador embutido é UMA só, compartilhada entre painel e CLI**; `--aba` age em
   outra sem trocar o que está na tela. O sidecar do navegador é ADITIVO: `url`/`targetId` no topo
   são os da aba ativa, e é só isso que o backend lê.
+- **O shell autenticado mantém a lista SSE mesmo com janela estreita ou outra tela aberta.**
+  Pedidos de navegador de outras sessões chegam por ela; reutilize o `sessionsStore` compartilhado.
 - **Aba escondida que NAVEGA para de compor quadro, e aí o Chromium engole mousedown e keydown.**
   Reemitir a mesma medida não ressuscita; quem reancora é uma medida DIFERENTE (ou um `shot`). Por
   isso `click`/`press` conferem a entrega com ouvinte em captura, reancoram, tentam UMA vez e só
@@ -308,9 +310,23 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   fonte que levou 429 espera 10 min antes de insistir.
 - **Redefinição guardada do Codex só vale com a janela de 7 dias em 100%.** O backend relê a cota
   antes de consumir, usa UUID idempotente por tentativa e força nova leitura após resultado definitivo.
-- **Servidor que não responde é marcado como DESLIGADO na primeira falha de rede, e só volta a ser
-  procurado quando a pessoa mandar** — sem retomada por tempo, e a marca é gravada (o iOS recarrega
-  o PWA sozinho e apagaria um contador em memória). Erro HTTP não conta: a máquina respondeu.
+- **Registro de peer nunca grava um endereço loopback, e endereço torto tem frase própria.**
+  `127.0.0.1` gravado no outro lado aponta para ele mesmo: a volta bate nele, volta com o nome
+  dele e o par falha PARECENDO registrado. Loopback → o endereço sai de `/api/alcance` do dono.
+  `estranho` (atendeu OUTRA máquina) é tipo próprio antes do `parcial` e abre a correção; e
+  "sem identificador" separa token recusado, máquina fora do ar e nome vazio — este último com
+  campo no detalhe de qualquer servidor com token aqui.
+- **Servidor que não responde sai da lista de sessões e volta a ser procurado automaticamente**:
+  espera de 2 s, 5 s, 30 s, 1 min, 2 min, 4 min, 5 min, 10 min e depois 30 min, mantendo esse
+  teto. A primeira queda NUNCA espera 30 s: backend reiniciando volta em segundos. O servidor
+  ativo e o que serve a página nunca recebem prazo: tentam em 1, 2, 4, 8, 16 e 30 s.
+  Prazo e contagem são persistidos para sobreviver à recarga.
+  Só uma resposta confirma a recuperação; expirar o prazo apenas permite nova tentativa.
+  Erro HTTP e cancelamento da página não são queda de rede. Reconectar permite tentar antes.
+  Quem respondeu nas últimas 24 h para em 30 s (2 s, 5 s, 30 s…) e é tentado na hora quando o app
+  abre ou volta a ficar visível: a queda dele é a suspensão do aparelho, não a máquina.
+  Falha com o app em segundo plano não conta (nem marca nem grava prazo): tenta a cada 30 s
+  fixos e reconecta todos na volta.
 - **Revisão de código:** neste repositório, revisão local e as verificações do projeto.
 - **MCP `hangar` (`/mcp`): identidade do chamador vai no cabeçalho e o backend resolve.** Chave
   vence pane, pane vence nome, pane ambíguo não resolve, nada resolvido é erro (nunca `cli`). O
@@ -322,6 +338,8 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   é a mesma para o `GET` e para o `POST` de `/file/text`. A mecânica de ler e gravar é a do
   `filetree` (`read_at`/`write_at`): digest da leitura, tmp+rename, `.git` fora por componente
   do realpath. Escrita nova fora da raiz entra por aqui, nunca afrouxando o `/files/write`.
+- **HTML servido como arquivo executa isolado e sem o token na URL do documento interno.**
+  Arquivos citados e uploads usam `file_response`; SVG/XML mantêm o MIME com scripts bloqueados.
 - **Logs pertencem ao Hangar, não à conta.** Use `log_paths.base()`; diário exportável registra
   etapas, códigos e origem da falha. Texto de conversa, credenciais e saídas brutas ficam fora
   dele. O shell Electron também escreve lá (`privado/shell.log`): lançado pelo `.desktop`, o

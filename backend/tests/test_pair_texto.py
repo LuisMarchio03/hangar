@@ -2,24 +2,36 @@ from app import pair_texto
 
 
 def test_texto_grupo_cita_membros_tarefa_e_contrato():
-    t = pair_texto.texto_grupo("a", ["b", "c"], "PM-1", "/x/.hangar-pair/grupo-g1.md")
-    assert t.startswith("[de: hangar] GRUPO DE TRABALHO ATIVO: você ('a') trabalha junto com 'b', 'c' na tarefa: PM-1.")
-    assert "hangar-send b \"sua mensagem\"" in t
+    t = pair_texto.texto_grupo("a", ["b", "c"], "ABC-1", "/x/.hangar-pair/grupo-g1.md")
+    assert t.startswith("[de: hangar] GRUPO DE TRABALHO ATIVO: você, 'a', trabalha junto com 'b', 'c' na tarefa: ABC-1.")
+    assert "hangar-send b \"msg\"" in t
     assert "/x/.hangar-pair/grupo-g1.md" in t
     assert "Confirme em uma linha." in t
 
 
+def test_texto_grupo_rotula_harness_e_escolhe_como_mandar_pelo_destinatario():
+    harness = {"a": "claude", "b": "codex", "c": "pi"}
+    claude = pair_texto.texto_grupo("a", ["b", "c"], "", None, harness)
+    assert "você, 'a' (Claude Code), trabalha junto com 'b' (Codex), 'c' (Pi)" in claude
+    assert "tool `send`" in claude and "Não use SendMessage" in claude
+    codex = pair_texto.texto_grupo("b", ["a", "c"], "", None, harness)
+    assert "tool `send`" in codex and "SendMessage" not in codex
+    pi = pair_texto.texto_grupo("c", ["a", "b"], "", None, harness)
+    assert "tool `send`" not in pi and "SendMessage" not in pi
+    assert "hangar-send a \"msg\"" in pi
+
+
 def test_texto_grupo_sem_contrato_nao_cita_arquivo():
     t = pair_texto.texto_grupo("a", ["srv::b"], "", None)
-    assert "Contrato/decisões" not in t
+    assert "CONTRATO:" not in t
     assert " na tarefa:" not in t
 
 
 def test_texto_entrada_lista_quem_entrou_e_membros_atuais():
-    t = pair_texto.texto_entrada(["d"], ["a", "b", "d"], "PM-1")
-    assert t == ("[de: hangar] 'd' entrou no seu grupo de trabalho na tarefa: PM-1. "
-                 "Membros agora: 'a', 'b', 'd'. Mesmo protocolo de sempre (1:1 por SendMessage/hangar-send; "
-                 "--group só pra marco). Não precisa responder.")
+    t = pair_texto.texto_entrada(["d"], ["a", "b", "d"], "ABC-1", {"d": "kimi"})
+    assert t == ("[de: hangar] 'd' (Kimi Code) entrou no seu grupo de trabalho na tarefa: ABC-1. "
+                 "Membros agora: 'a', 'b', 'd' (Kimi Code). Mesmo protocolo de sempre (1:1; aviso de grupo "
+                 "só pra marco). Não precisa responder.")
 
 
 def test_texto_saida_com_e_sem_resto():

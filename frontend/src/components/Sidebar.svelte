@@ -21,13 +21,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import GroupGlyph from './icons/GroupGlyph.svelte';
   import SessionSignals from './SessionSignals.svelte';
   import type { SessionInfo, AggSession, Provider } from '@hangar/core';
-  import { cwdParts, rotuloEstado, stateColors, countAwaiting, railLabel, fmtWhen, relativeTime, latestAssistantEvent, clusterByPair, untrackedReason, providerTag } from '@hangar/core';
+  import { cwdParts, rotuloEstado, stateColors, countAwaiting, railLabel, fmtWhen, relativeTime, latestAssistantEvent, untrackedReason, providerTag } from '@hangar/core';
   import { arrastarGrupo, mensagemRecusa } from '../lib/arrastarGrupo.svelte';
   import { createDragToGroup, dragChave } from '../lib/dragToGroup';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '@hangar/core';
-  import { planBadge } from '@hangar/core';
-  import PlanBar from './PlanBar.svelte';
   import type { WorkspaceAction, WorkspaceView } from '../lib/workspaceCommands';
   import WorkspaceNav from './WorkspaceNav.svelte';
   import { sidebarPrefs } from '../lib/sidebarPrefs.svelte';
@@ -36,7 +34,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import { navMode } from '../lib/navMode.svelte';
   import { ctxPanel } from '../lib/ctxPanel.svelte';
   import { navegadorPanel } from '../lib/navegadorPanel.svelte';
-  import { createSessionListModel, pairCodigo, pairResto } from '../lib/sessionListModel.svelte';
+  import { createSessionListModel, groupItems, pairCodigo, pairResto, type Group } from '../lib/sessionListModel.svelte';
 
   const DEFAULT_BRANCHES = new Set(['main', 'master']);
 
@@ -286,7 +284,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // celular (SessionList.svelte, groupRep): join_group funde o grupo inteiro, então basta o 1º
   // membro pra avaliar canPair/soltar.
   function groupRep(gid: string): AggSession | null {
-    return model.allSessions.find((s) => s.pair_gid === gid) ?? null;
+    return model.pairMembers(gid)[0] ?? null;
   }
 
   function onMainClick(name: string, serverId: string, tracked: boolean | undefined, provider?: SessionInfo['provider']) {
@@ -545,8 +543,23 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // pra dizer que não há nada. Não esconde nada acionável — o "+ Nova" recebe a lista COMPLETA de
   // servidores (`servers`, não `renderGroups`) e deixa escolher o alvo, então dá pra criar sessão
   // num servidor que não aparece aqui.
-  const onlineGroups = $derived(model.groups.filter((g) => !g.error && g.sessions.length > 0));
-  const offlineGroups = $derived(model.groups.filter((g) => g.error));
+  const groupBuckets = $derived.by(() => {
+    const offline = sessionsStore.byServer.filter(b => b.error);
+    const offlineIds = new Set(offline.map(b => b.server.id));
+    const key = (s: AggSession) => `${s.serverId}::${s.name}`;
+    const paired = new Set(model.groups.filter(g => g.pair).flatMap(g => g.sessions.map(key)));
+    const visible = new Set(model.flatRows.map(key));
+    const onlineGroups = model.groups.map(g => g.pair ? g : {
+      ...g, sessions: g.sessions.filter(s => !offlineIds.has(s.serverId)),
+    }).filter(g => !g.error && g.sessions.length > 0);
+    const offlineGroups: Group[] = offline.map(b => ({
+      id: b.server.id, label: b.server.label, color: serverColor(b.server.id), error: b.error,
+      sessions: b.sessions.filter(s => visible.has(key(s)) && !paired.has(key(s))),
+    }));
+    return { onlineGroups, offlineGroups };
+  });
+  const onlineGroups = $derived(groupBuckets.onlineGroups);
+  const offlineGroups = $derived(groupBuckets.offlineGroups);
   const renderGroups = $derived(showOffline ? [...onlineGroups, ...offlineGroups] : onlineGroups);
 
 
@@ -706,6 +719,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
             {#if awaiting > 0}<span class="grp-await" title={`${awaiting} ${m.estado_aguardando()}`}>{awaiting}</span>{/if}
             {#if g.error}<span class="grp-off">{g.error}</span>{/if}
           </button>
+          {#if g.error}
+            <button class="grp-broadcast" onclick={() => sessionsStore.buscarAgora(g.id)}
+                    aria-label={`${m.maquinas_reconectar()}: ${g.label}`} title={m.maquinas_reconectar()}>↻</button>
+          {/if}
           <!-- "enviar p/ todas" (feature #9): entra em modo seleção com o grupo inteiro marcado. -->
           <button
             class="grp-broadcast"
@@ -721,13 +738,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         </div>
       {/if}
       {#if !expanded || !model.collapsed.has(g.id)}
-      {#each clusterByPair(g.sessions) as item (item.kind === 'header' ? `ph:${item.gid}` : `${item.session.serverId}::${item.session.name}`)}
+      {#each groupItems(g) as item (item.kind === 'header' ? `ph:${item.gid}` : `${item.session.serverId}::${item.session.name}`)}
         {#if item.kind === 'header'}
           {#if expanded}
           <!-- Cluster de pareamento (Opção C): sub-header colapsável do grupo, dentro do servidor.
                Cabeçalho leve + barra de accent nos membros: dentro de uma caixa tingida o realce
                de quem espera resposta sumia. -->
-          {@const pairAwaiting = countAwaiting(g.sessions.filter((x) => x.pair_gid === item.gid))}
+          {@const pairAwaiting = countAwaiting(model.pairMembers(item.gid))}
           {@const rep = groupRep(item.gid)}
           {@const repChave = rep ? dragChave(rep) : ''}
           {@const dropAlvoAtual = arrastarGrupo.alvo === repChave}
@@ -751,8 +768,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
             <span class="pair-head-glifo"><GroupGlyph size={13} /></span>
             <!-- Código curto em destaque e o resto do assunto em cinza: o rótulo é o resumo do
                  ticket inteiro e, todo em accent, virava a coisa mais berrante da lista. -->
-            <span class="pair-head-cod">{pairCodigo(item.label)}</span>
-            {#if pairResto(item.label)}<span class="pair-head-resto">{pairResto(item.label)}</span>{/if}
+            <span class="pair-head-label"><span class="pair-head-cod">{pairCodigo(item.label)}</span>{#if pairResto(item.label)}<span class="pair-head-resto"> {pairResto(item.label)}</span>{/if}</span>
             <!-- Quantas do grupo esperam você: o header de SERVIDOR já diz isso e o de pareamento
                  não dizia — e é o que precisa sobreviver com o grupo recolhido. -->
             {#if pairAwaiting > 0}
@@ -872,14 +888,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   <span class="prov-rail" title={provTag ?? 'Claude'}><ProviderGlyph provider={s.provider} size={10} /></span>
                 {/if}
               </span>
-              {#if !expanded && !model.selectMode}
-                <!-- Rail recolhido: barra única na base da row, irmã de .lead (não dentro dele —
-                     .lead é a coluna das iniciais). .sess-main precisa de position:relative pra
-                     ancorar o position:absolute do compact (ver CSS). A barra e o glifo do harness
-                     disputavam esta mesma faixa e eram mutuamente exclusivos; o glifo subiu pro
-                     canto de cima do avatar e a base voltou a ser só da barra. -->
-                <PlanBar session={s} compact />
-              {/if}
               {#if expanded}
               <span class="row-info">
                   <span class="name-row">
@@ -905,6 +913,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                       </span>
                     {/if}
                   </span>
+                  {#if g.pair}
+                    <span class="pair-server" style:color={s.serverColor}>
+                      {sessionsStore.byServer.find(b => b.server.id === s.serverId)?.error === 'offline'
+                        ? m.lista_servidor_offline({ label: s.serverLabel }) : s.serverLabel}
+                    </span>
+                  {/if}
                   {#if s.state === 'idle' && s.last_reply}
                     <span class="status-sub reply" title={s.last_reply}>
                       <span class="reply-mark" aria-hidden="true">◆</span>
@@ -961,7 +975,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                       {/if}
                     </span>
                   {/if}
-                  {#if s.then_target || s.pair_peers?.length || s.loop_status || s.engine || s.plan_name}
+                  {#if s.then_target || s.pair_peers?.length || s.loop_status || s.engine}
                     <!-- Chips informativos (⏳/🔗/🤝/↻/⚙) na COLUNA DE TEXTO, nao ao lado do state-chip:
                          inline eles cobriam o cwd em sidebar estreita (mesmo fix do SessionCard mobile).
                          O glifo do agente saiu daqui pro canto do avatar (mesmo arranjo do trilho) e a
@@ -980,12 +994,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                           <span class="chain-chip" style="color: {LOOP_TONE_COLOR[lb.tone]}; background: color-mix(in srgb, {LOOP_TONE_COLOR[lb.tone]} 14%, transparent);" title={m.sessao_loop_runner()}>{lb.label}</span>
                         {/if}
                       {/if}
-                      {#if s.plan_name}
-                        {@const pb = planBadge(s)}
-                        {#if pb}
-                          <span class="plan-chip" class:plan-chip--done={pb.complete} title={pb.title}>{pb.label}</span>
-                        {/if}
-                      {/if}
                       {#if s.engine}
                         <!-- Sem isto nada na lista distingue uma sessão de motor de uma da conta Anthropic.
                              NÃO mostramos custo aqui: o preço que o Claude Code calcula é tabela Anthropic
@@ -994,7 +1002,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                       {/if}
                     </span>
                   {/if}
-                  <PlanBar session={s} />
                 </span>
                 <!-- O envelope .state-chip existe pelo anel de travada e pelas regras que ja
                      miravam essa classe (hover da linha, papel de parede no app.css); a pilula em
@@ -1039,11 +1046,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     {/each}
     {#if expanded && offlineGroups.length > 0}
       <!-- Resumo dos offline (uma linha em vez de N headers): expande pra ver/gerenciar. -->
-      <!-- Abrir a lista dos offline é dizer "quero ver essas máquinas agora": fura a espera do
-           esfriamento, senão a que acabou de ligar só apareceria no fim dela. -->
-      <button class="grp-offline-sum" onclick={() => { showOffline = !showOffline; if (showOffline) sessionsStore.buscarAgora(); }} aria-expanded={showOffline}>
+      <button class="grp-offline-sum" onclick={() => { showOffline = !showOffline; }} aria-expanded={showOffline}>
         <span class="grp-chevron" class:collapsed={!showOffline} aria-hidden="true">▾</span>
-        ⚠ {offlineGroups.length === 1 ? m.sessao_offline_1() : m.sessao_offline({ n: offlineGroups.length })}
+        <span class="grp-offline-label">⚠ {offlineGroups.length === 1 ? m.sessao_offline_1() : m.sessao_offline({ n: offlineGroups.length })}</span>
         {#if !showOffline}<span class="grp-offline-names">({offlineGroups.map((g) => g.label).join(', ')})</span>{/if}
       </button>
     {/if}
@@ -1650,13 +1655,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     border-radius: var(--radius-sm);
   }
   .pair-head-glifo { display: inline-flex; align-items: center; flex-shrink: 0; }
-  .pair-head-cod { flex-shrink: 0; }
+  .pair-head-label { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
   /* O rótulo é o resumo do ticket inteiro; só a chave fica em accent e o assunto vai em cinza,
      senão a linha inteira do grupo compete com as sessões. */
   .pair-head-resto {
-    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-weight: 400; color: var(--text-muted);
   }
+  .pair-server { font-size: var(--text-xs); overflow-wrap: anywhere; }
   .pair-head .grp-await, .pair-head .grp-count { margin-left: auto; }
   .pair-head .grp-await + .grp-count { margin-left: 0; }
   @media (hover: hover) { .pair-head:hover { color: var(--text-primary); } }
@@ -1692,6 +1697,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     border-radius: var(--radius-md); font-size: var(--text-xs); font-weight: 600;
     color: var(--warning); text-align: left;
   }
+  .grp-offline-label { flex-shrink: 0; white-space: nowrap; }
   .grp-offline-sum:hover { background: var(--bg-hover); }
   .grp-offline-names {
     color: var(--text-muted); font-weight: 500; overflow: hidden;
@@ -1868,25 +1874,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     max-width: 96px; overflow: hidden; text-overflow: ellipsis;
     color: var(--accent); background: var(--accent-dim);
   }
-  /* Progresso do plano do superpowers (Task 3). */
-  .plan-chip {
-    padding: 1px 6px;
-    border-radius: var(--radius-full);
-    background: var(--accent-dim);
-    color: var(--accent);
-    font-size: 10px;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-    /* O rotulo agora carrega o NOME do plano, que e longo e variavel: sem teto ele empurrava o resto
-       da linha de chips pra fora. Corta o nome com reticencias e mantem a linha inteira. */
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 22ch;
-  }
-  .plan-chip--done {
-    background: color-mix(in srgb, var(--success) 14%, transparent);
-    color: var(--success);
-  }
   /* Motor de modelo (Task 5): sessao rodando fora da conta Anthropic. */
   /* Provider da sessão (Codex/Pi) — só o que NÃO é Claude ganha chip. Tinta neutra de propósito:
      é rótulo de identidade, não estado; accent já é "motor" e âmbar já é "sem id". */
@@ -1959,9 +1946,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     55%      { box-shadow: 0 0 0 7px color-mix(in srgb, var(--cor, transparent) 0%, transparent); }
   }
   .sidebar.collapsed .sess-row { justify-content: center; }
-  /* position:relative pra ancorar a PlanBar compact (position:absolute) — sem isto ela flutua em
-     relação ao body inteiro em vez de ficar na base desta linha. */
-  .sidebar.collapsed .sess-main { justify-content: center; padding: 0; position: relative; }
+  .sidebar.collapsed .sess-main { justify-content: center; padding: 0; }
   .sess-row.active .sess-main { color: var(--text-primary); }
   .sess-name {
     flex: 0 1 auto; min-width: min-content; max-width: 100%;

@@ -3,7 +3,7 @@
 // mascarada; este módulo só exibe. Módulo próprio porque o cliente da casa (lib/api.ts) está
 // fechado para as Tasks deste plano — cada uma cria o seu, no mesmo padrão.
 import { dropActiveServer, getBaseUrl, getToken, type Server } from './auth';
-import { errorDetail } from '@hangar/core';
+import { errorDetail, probeServerResponse } from '@hangar/core';
 import * as m from '../paraglide/messages';
 
 /** Peer como o backend devolve: `token` é SEMPRE a máscara (conferível, não copiável). */
@@ -40,15 +40,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 // api.ts:129-131). Prazo de 8s: servidor atrás de VPN não recusa conexão, pendura — sem prazo a
 // seção ficava "Carregando…" pra sempre (mesmo desenho de apiFetchForServer).
 async function reqEm<T>(s: Server, path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${s.baseUrl}${path}`, {
-    signal: AbortSignal.timeout(8000),
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${s.token}`,
-      ...(init?.headers ?? {}),
-    },
-  });
+  const res = await probeServerResponse(s, path, init);
   if (!res.ok) throw Object.assign(new Error(await errorDetail(res)), { status: res.status });
   return res.json() as Promise<T>;
 }

@@ -30,7 +30,7 @@
   import SubagenteCard from './SubagenteCard.svelte';
   import { lerSubagenteCodex } from '../lib/subagenteCodex';
   import { transcriptImageUrl, uploadUrl } from '@hangar/core';
-  import { windowStartFor, nextWindowEnd, precisaPreencher, mostrarIrPraoFim, nextAtBottom } from '../lib/window';
+  import { windowStartFor, nextWindowEnd, precisaPreencher, mostrarIrPraoFim, nextAtBottom, renovarGesto } from '../lib/window';
   import * as diag from '../lib/diag';
 
   interface Props {
@@ -103,13 +103,15 @@
      *  chegar a cauda do servidor, trocar de transcript). Cada mudanca re-ancora a janela na cauda
      *  — ver `ancoraVista`. Quem nao carrega historico (Archive, ActivitySheet) nao passa. */
     ancora?: number;
+    /** Mensagem pra abrir rolada até ela (trecho escolhido na busca). */
+    focoId?: string | null;
   }
 
   let {
     events, stateEvent, pending, sessionName, dockH, preview = '', previewMd = false, previewFull = false, previewVivo = false, pensamento = '', ferramenta = null, onSelectOption, onSubmitSelected, onCancel, agentesRodando = [], onAbrirAgente = undefined,
     askOpen = false, askPayload = null, askActive = false, onAnswer, onAskClose, onFimDoLocal,
     imageUrl, swapIds, codex = false, plan = null, footer,
-    onForward, onOpenSession, onOpenOrq, onDescartarFila, ancora = 0
+    onForward, onOpenSession, onOpenOrq, onDescartarFila, ancora = 0, focoId = null
   }: Props = $props();
 
   type PlanComponentProps = {
@@ -167,10 +169,20 @@
   let piso = 0;                // quanto do `extra` a TELA precisa pra ter rolagem (ver preencherTela)
 
   let lastTop = 0;
+  // Janela em que um evento de scroll conta como GESTO da pessoa. Roda do dedo, toque, teclado e
+  // barra de rolagem passam por aqui; escrita de `scrollTop` e crescimento do conteúdo, não. É o
+  // que separa "subi pra ler o histórico" (solta) de "a resposta cresceu" (continua acompanhando).
+  let gestoAte = 0;
+  function marcarGesto() { gestoAte = performance.now() + 400; }
   function onScroll() {
     if (!listEl) return;
     const gap = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
-    atBottom = nextAtBottom(listEl.scrollTop, lastTop, gap);
+    const agora = performance.now();
+    const gesto = agora < gestoAte;
+    // Movimento que continua (arraste da barra, inércia do trackpad) segue sendo gesto: sem isto
+    // ele expirava no meio e a lista voltava a se achar colada.
+    gestoAte = renovarGesto(agora, gestoAte);
+    atBottom = nextAtBottom(atBottom, listEl.scrollTop, lastTop, gap, gesto);
     lastTop = listEl.scrollTop;
     scrolledUp = gap > listEl.clientHeight; // mais de uma tela do fim = "muito pra cima" -> botao
     // Perto do topo + ainda ha eventos antigos fora da janela -> revela a proxima pagina.
@@ -454,6 +466,21 @@
     tick().then(() => { scrollToBottom(); preencherTela(); });
   });
 
+  // Abre no trecho da busca: alarga a janela até a mensagem e solta o fim, senão o auto-scroll
+  // puxaria a tela de volta pra cauda.
+  let alvoEl: HTMLElement | undefined = $state();
+  let focoAplicado: string | null = null;
+  $effect(() => {
+    const id = focoId;
+    if (!id || id === focoAplicado || !windowEnd) return;
+    const i = events.findIndex((e) => e.id === id);
+    if (i < 0) return;
+    focoAplicado = id;
+    atBottom = false;
+    if (i < windowStart) extra += windowStart - i + 10;
+    tick().then(() => requestAnimationFrame(() => alvoEl?.scrollIntoView({ block: 'start' })));
+  });
+
   let rafScroll = 0;
   function scrollToBottom() {
     // Coalesce as escritas num rAF: o preview muda a cada ~150ms (e ate token a token), e uma
@@ -476,10 +503,17 @@
   style="--dock-h: {dockH}px"
   bind:this={listEl}
   onscroll={onScroll}
+  onwheel={marcarGesto}
+  ontouchmove={marcarGesto}
+  onpointerdown={marcarGesto}
+  onkeydown={marcarGesto}
   aria-label={m.msg_aria_mensagens()}
 >
   <div class="messages-inner">
     {#each renderItems as item (item.id)}
+      {#if focoId && item.id === focoId}
+        <div class="alvo-busca" bind:this={alvoEl}>{m.busca_trecho_aqui()}</div>
+      {/if}
       {#if item.type === 'tasks'}
         <TaskRows tasks={tarefas} />
       {:else if item.type === 'group'}
@@ -522,9 +556,18 @@
                 ? img.filenames.slice(0, Math.max(0, img.filenames.length - ev.image_count))
                 : img.filenames)
             : []}
-          <ImageBubble caption={img ? img.caption : ev.text ?? ''}
-                       srcs={[...enviadas.map((f) => uploadUrl(sessionName, f)),
-                              ...Array.from({ length: ev.image_count }, (_, i) => imageUrl ? imageUrl(ev.id, i) : transcriptImageUrl(sessionName, ev.id, i))]} />
+          {@const srcs = [...enviadas.map((f) => uploadUrl(sessionName, f)),
+                          ...Array.from({ length: ev.image_count }, (_, i) => imageUrl ? imageUrl(ev.id, i) : transcriptImageUrl(sessionName, ev.id, i))]}
+          {#if peer}
+            <!-- Recado de sessao-irma COM captura: continua sendo recado (chip "de: X", markdown),
+                 so que com as miniaturas em cima. Sem este ramo a foto vencia e o recado saia
+                 como bolha tua, com o "[de: X]" cru no texto. -->
+            <UserBubble text={peer.text} ts={ev.ts} from={peer.from} scope={peer.scope} {srcs}
+                        onForward={onForward ? () => onForward(forwardText) : null}
+                        onOpenPeer={onOpenSession ? () => onOpenSession(peer.from) : null} />
+          {:else}
+            <ImageBubble caption={img ? img.caption : ev.text ?? ''} {srcs} />
+          {/if}
         {:else if ev.id.startsWith('queued-') || ev.id.startsWith('held:')}
           <!-- Msg da fila durável ("queued-") ou recado preso em entrega bloqueada ("held:", o
                harness registrou o texto de um UserPromptSubmit que hook barrou e o agente NUNCA
@@ -703,6 +746,21 @@
 {/if}
 
 <style>
+  .alvo-busca {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--accent);
+    scroll-margin-top: var(--space-6);
+  }
+  .alvo-busca::before, .alvo-busca::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--accent-dim);
+  }
   /* `.message-list` e `.messages-inner` são alcançados de fora: o painel de Atividade embute esta
      lista para mostrar a conversa de um subagente e precisa anular, com `!important`, a reserva da
      coluna de contexto (o padding-direito que o Chat aplica) e o teto da coluna de leitura — numa

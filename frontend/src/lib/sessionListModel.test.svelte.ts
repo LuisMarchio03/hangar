@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Store plano (sem reatividade), como o Sidebar.test.ts faz: preencher ANTES de criar o modelo.
 const store = vi.hoisted(() => ({
   rows: [] as any[], byServer: [] as any[], servers: [] as any[], loading: false,
+  identities: undefined as ReadonlyMap<string, string> | undefined,
   retain: vi.fn(), release: vi.fn(), markDeleting: vi.fn(), unmarkDeleting: vi.fn(),
 }));
 vi.mock('./sessionsStore.svelte', () => ({ sessionsStore: store }));
@@ -17,7 +18,7 @@ vi.mock('./auth', () => ({
   getActiveId: vi.fn(() => 'srv-a'), selectServer: vi.fn(), serverColor: (id: string) => `c-${id}`,
 }));
 
-import { createSessionListModel } from './sessionListModel.svelte';
+import { createSessionListModel, groupItems } from './sessionListModel.svelte';
 
 const sess = (name: string, serverId: string, over: Record<string, unknown> = {}) => ({
   name, serverId, serverLabel: serverId.toUpperCase(), serverColor: `c-${serverId}`,
@@ -35,7 +36,7 @@ function comServidores(buckets: { id: string; label: string; sessions: any[]; er
 }
 const opts = (variant: 'desktop' | 'mobile') => ({ variant, onOpen: vi.fn(), onCompare: vi.fn() });
 
-beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); });
+beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); store.identities = undefined; });
 
 describe('modo efetivo de agrupamento (divergência #1/#2 da spec)', () => {
   it('pref "none" com 2 servidores: desktop lista lisa, celular agrupa por servidor', () => {
@@ -106,6 +107,101 @@ describe('grupos por servidor (divergência #3)', () => {
       expect(g.color).toBe('c-srv-z');
       expect(g.sessions.map((s) => s.name)).toEqual(['a', 'b']);
     }
+  });
+  it('preserva o erro do servidor mesmo com sessões da última resposta boa', () => {
+    store.byServer[0].error = 'offline';
+    for (const variant of ['desktop', 'mobile'] as const) {
+      const group = createSessionListModel(opts(variant)).allGroups.find(g => g.id === 'srv-z')!;
+      expect(group.error).toBe('offline');
+      expect(group.sessions.map(s => s.name)).toEqual(['s1']);
+    }
+  });
+});
+
+describe('pares remotos ficam juntos antes de agrupar por servidor ou projeto', () => {
+  beforeEach(() => {
+    store.identities = new Map([['srv-a', 'notebook-jefferson'], ['srv-b', 'delphi-02']]);
+    comServidores([
+      { id: 'srv-a', label: 'Notebook', sessions: [
+        sess('jefferson-2', 'srv-a', { pair_gid: 'b745f21b', pair_peers: ['delphi-02::setup-vm'], pair_task: 'TASK-123 Configurar VM', cwd: '/w/web' }),
+        sess('solo-a', 'srv-a'),
+      ] },
+      { id: 'srv-b', label: 'Delphi', sessions: [
+        sess('setup-vm', 'srv-b', { pair_gid: '3881e52a', pair_peers: ['notebook-jefferson::jefferson-2'], cwd: '/w/delphi' }),
+        sess('solo-b', 'srv-b'),
+      ] },
+    ]);
+  });
+
+  it.each((['desktop', 'mobile'] as const).flatMap(variant =>
+    ['server', 'project', 'none'].map(mode => ({ variant, mode }))))('$variant/$mode: um cabeçalho remoto, sem duplicar membros', ({ variant, mode }) => {
+    localStorage.setItem('cp_group_by', mode);
+    const model = createSessionListModel(opts(variant));
+    const group = model.allGroups[0];
+    expect(group.pair?.label).toBe('TASK-123 Configurar VM');
+    expect(group.label).toBe('');
+    expect(group.sessions.map(s => s.name)).toEqual(['jefferson-2', 'setup-vm']);
+    expect(model.allSessions).toHaveLength(4);
+    expect(new Set(model.allSessions.map(s => `${s.serverId}::${s.name}`)).size).toBe(4);
+    expect(model.allGroups.slice(1).flatMap(g => g.sessions.map(s => s.name)).sort()).toEqual(['solo-a', 'solo-b']);
+    const items = groupItems(group);
+    expect(items[0]).toEqual({ kind: 'header', gid: group.pair!.id, label: 'TASK-123 Configurar VM', count: 2 });
+    expect(items.filter(item => item.kind === 'session')).toHaveLength(2);
+    expect(model.pairMembers(group.pair!.id)).toEqual(group.sessions);
+    expect(group.sessions.map(s => s.pair_gid)).toEqual(['b745f21b', '3881e52a']);
+  });
+
+  it.each(['desktop', 'mobile'] as const)('filtro por nome ou tarefa mantém o par inteiro no %s', (variant) => {
+    const model = createSessionListModel(opts(variant));
+    for (const query of ['setup-vm', 'jefferson-2', 'configurar vm']) {
+      model.filterText = query;
+      expect(model.groups).toHaveLength(1);
+      expect(model.flatRows.map(s => s.name)).toEqual(['jefferson-2', 'setup-vm']);
+    }
+    model.filterText = 'não-existe';
+    expect(model.groups).toEqual([]);
+  });
+
+  it('abrir, comparar e enviar ao par usam os servidores originais', async () => {
+    const options = opts('desktop');
+    const model = createSessionListModel(options);
+    const group = model.allGroups[0];
+    const remote = group.sessions.find(s => s.name === 'setup-vm')!;
+    expect(model.open(remote)).toBe(true);
+    expect(selectServer).toHaveBeenLastCalledWith('srv-b');
+    expect(options.onOpen).toHaveBeenCalledWith('setup-vm');
+    model.selectGroupForBroadcast(group);
+    model.openCompare();
+    expect(options.onCompare).toHaveBeenCalledWith([
+      { serverId: 'srv-a', name: 'jefferson-2' }, { serverId: 'srv-b', name: 'setup-vm' },
+    ]);
+    const targets: Array<{ server: unknown; names: string[] }> = [];
+    vi.mocked(broadcast).mockImplementation(async (names: string[]) => {
+      targets.push({ server: vi.mocked(selectServer).mock.lastCall?.[0], names });
+      return Object.fromEntries(names.map(name => [name, { ok: true }])) as any;
+    });
+    model.broadcastText = 'continuar';
+    await model.sendBroadcast();
+    expect(targets).toEqual([
+      { server: 'srv-a', names: ['jefferson-2'] }, { server: 'srv-b', names: ['setup-vm'] },
+    ]);
+  });
+
+  it('persiste o recolhimento pelo id visual remoto', () => {
+    const model = createSessionListModel(opts('desktop'));
+    const key = `pair:${model.allGroups[0].pair!.id}`;
+    model.toggleGroup(key);
+    expect(JSON.parse(localStorage.getItem('cp_collapsed_servers')!)).toContain(key);
+    expect(createSessionListModel(opts('desktop')).collapsed.has(key)).toBe(true);
+  });
+
+  it('sem identidade confirmada mantém os membros no agrupamento existente', () => {
+    store.identities = undefined;
+    const model = createSessionListModel(opts('desktop'));
+    expect(model.allGroups.every(g => !g.pair)).toBe(true);
+    const local = model.allGroups.find(g => g.id === 'srv-a')!;
+    expect(groupItems(local).find(item => item.kind === 'header')).toMatchObject({ gid: 'b745f21b', count: 1 });
+    expect(model.pairMembers('b745f21b').map(s => s.name)).toEqual(['jefferson-2']);
   });
 });
 

@@ -2,6 +2,7 @@
 import { intlLocale } from '../lib/locale';
 import { renderMarkdown } from '../lib/markdown';
 import { parseCanal, parseRealtimeDelegation } from '@hangar/core';
+import { abrirVisor } from '../lib/visor';
 import * as m from '../paraglide/messages';
   interface Props {
     text: string;
@@ -11,8 +12,24 @@ import * as m from '../paraglide/messages';
     scope?: 'peer' | 'group' | 'panel' | null; // 'group' = aviso pro grupo ([grupo: X]); 'panel' = recado automático do app ([painel: X])
     onForward?: (() => void) | null; // abre o picker "encaminhar pra sessao" (botao ↗)
     onOpenPeer?: (() => void) | null; // tap no chip "de: X" -> abre o chat da sessao remetente
+    srcs?: string[];               // imagens anexadas (recado de sessao-irma com captura de tela)
   }
-  let { text, ts, animate = true, from = null, scope = 'peer', onForward = null, onOpenPeer = null }: Props = $props();
+  let { text, ts, animate = true, from = null, scope = 'peer', onForward = null, onOpenPeer = null, srcs = [] }: Props = $props();
+
+  // Mesmo visor do ImageBubble: os botoes das miniaturas dao ao visor o tamanho natural e a origem
+  // da animacao.
+  const botoes: (HTMLElement | undefined)[] = [];
+  function abrirImagem(i: number) {
+    void abrirVisor(
+      srcs.map((src, j) => ({
+        url: src,
+        nome: (src.split('/').pop() ?? src).split('?')[0],
+        tipo: 'image' as const,
+        element: botoes[j],
+      })),
+      i,
+    );
+  }
 
   // Recado de OUTRA sessão é escrito por um agente: vem em markdown, e sem renderizar o usuário lê
   // "**Você não precisa fazer nada.**" com os asteriscos à mostra (regra do app: markdown nunca
@@ -52,6 +69,15 @@ import * as m from '../paraglide/messages';
           <span class="peer-chip">{label}</span>
         {/if}
         {#if canal}<span class="canal">{canal.canal}</span>{/if}
+      </div>
+    {/if}
+    {#if srcs.length}
+      <div class="thumb-row" class:thumb-row--multi={srcs.length > 1}>
+        {#each srcs as src, i}
+          <button class="thumb-btn" bind:this={botoes[i]} onclick={() => abrirImagem(i)} aria-label={m.anexos_ver_original()}>
+            <img class="thumb" {src} alt={m.anexos_imagem_enviada()} loading="lazy" />
+          </button>
+        {/each}
       </div>
     {/if}
     {#if from}
@@ -131,6 +157,32 @@ import * as m from '../paraglide/messages';
     gap: 6px;
     margin-bottom: var(--space-1);
   }
+
+  /* Miniaturas iguais as do ImageBubble: anexo em cima, texto embaixo. */
+  .thumb-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    margin-bottom: var(--space-2);
+  }
+  .thumb-btn {
+    padding: 0;
+    border: none;
+    background: none;
+    line-height: 0;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+  .thumb {
+    width: 96px;
+    height: 96px;
+    object-fit: cover;
+    display: block;
+    outline: 1px solid var(--border-default);
+    outline-offset: -1px;
+    border-radius: var(--radius-md);
+  }
+  .thumb-row--multi .thumb { width: 80px; height: 80px; }
 
   .voice-details { margin-top: var(--space-2); font-size: var(--text-xs); color: var(--text-secondary); }
   .voice-details summary { cursor: pointer; padding-block: 6px; }

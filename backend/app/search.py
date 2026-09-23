@@ -18,14 +18,18 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from app.config import settings
-from app.archive import _head_info
+from app.archive import _contas, _head_info
 from app.transcript import parse_obj
 
 # Caps HARD (uma query ampla nao pode despejar o mundo).
 _MAX_HITS = 50            # teto global de trechos devolvidos
-_MAX_PER_FILE = 3         # -m: matches por arquivo (evita 1 transcript dominar o resultado)
-_SNIPPET = 180            # tamanho do trecho legivel
+_MAX_PER_FILE = 3         # trechos por conversa (evita 1 transcript dominar o resultado)
+# Linhas casadas lidas por arquivo ANTES do filtro: contexto injetado (CLAUDE.md, lista de skills,
+# saída de hook) casa muito mais que a conversa e comeria o teto por arquivo se ele fosse o do rg.
+_MAX_LINHAS_POR_ARQUIVO = 200
+# Mensagem de conversa cabe folgado nisto; linha maior é saída de ferramenta ou contexto injetado.
+_MAX_COLUNAS = 40000
+_SNIPPET = 240            # tamanho do trecho legivel
 _MAX_Q = 200             # comprimento maximo da query (excedente e truncado)
 # ponytail: rede de seguranca; transcript acima disso e raro (rg com -m ja sai cedo por arquivo).
 # Sobe se um dia um transcript legitimo passar disso e some da busca.
@@ -69,57 +73,91 @@ class SearchHit(BaseModel):
     line: str                           # trecho legivel (texto da msg), NAO o JSON cru
     mtime: float
     live: bool = False
+    role: Optional[str] = None          # "user" | "assistant": quem escreveu a mensagem casada
+    event_id: Optional[str] = None      # id do ChatEvent (o mesmo do histórico) pra abrir no ponto
+    ts: Optional[float] = None          # quando a mensagem foi escrita
 
 
-def _snippet(raw: str, q: str) -> str:
-    """Trecho legivel de uma linha casada. A linha e uma entrada JSON do transcript -> extrai o TEXTO
-    da msg (ou o resultado de ferramenta) em vez de despejar o JSON cru; janela centrada no termo pra o
-    match aparecer mesmo numa msg longa. Fallback: raw truncado (linha sem texto parseavel)."""
-    text = ""
+def termos(q: str) -> list[str]:
+    """Palavras da busca, minúsculas e sem repetição: todas precisam estar na mesma mensagem."""
+    return list(dict.fromkeys(re.findall(r"\S+", (q or "").lower()[:_MAX_Q])))
+
+
+def _snippet(text: str, termos_: list[str]) -> str:
+    """Janela legível do texto em volta do primeiro termo, sem quebras de linha e sem cortar palavra."""
+    text = " ".join(text.split())
+    if len(text) <= _SNIPPET:
+        return text
+    i = max(0, text.lower().find(termos_[0])) if termos_ else 0
+    start = max(0, i - 60)
+    if start:
+        espaco = text.find(" ", start)
+        start = espaco + 1 if 0 <= espaco < i else start
+    fim = start + _SNIPPET
+    if fim < len(text):
+        espaco = text.rfind(" ", start, fim)
+        fim = espaco if espaco > i else fim
+    return ("…" if start else "") + text[start:fim] + ("…" if fim < len(text) else "")
+
+
+def _mensagens(raw: str):
+    """Mensagens da conversa (sua ou do assistente) contidas numa linha do transcript. Contexto
+    injetado, resultado de ferramenta e meta não entram: não são o que a pessoa procura."""
     try:
         obj = json.loads(raw)
-        if isinstance(obj, dict):
-            parts: list[str] = []
-            for ev in parse_obj(obj):
-                if ev.text:
-                    parts.append(ev.text)
-                elif ev.result:
-                    parts.append(ev.result)
-            text = " ".join(parts).strip()
     except (ValueError, TypeError):
-        pass
-    if not text:
-        text = raw.strip()
-    low, ql = text.lower(), q.lower()
-    i = low.find(ql)
-    if i < 0 or len(text) <= _SNIPPET:
-        return text[:_SNIPPET]
-    start = max(0, i - 40)   # abre um pouco antes do termo pra dar contexto
-    return ("…" if start else "") + text[start:start + _SNIPPET]
+        return []
+    if not isinstance(obj, dict):
+        return []
+    return [ev for ev in parse_obj(obj) if ev.kind in ("user_msg", "assistant_msg") and ev.text]
+
+
+def _prefixos_internos() -> tuple[str, ...]:
+    """Começo do pedido dos `claude -p` do próprio Hangar (Perguntar, refino do loop, resumo do
+    bastão). Os gravados antes do --no-session-persistence apareciam como conversa do usuário."""
+    from app import bastao, loop
+    return tuple(p[:60] for p in (_ASK_SYSTEM, loop._REFINE_SYSTEM, bastao._REESCRITA_PEDIDO))
+
+
+def _interno(path: str, prefixos: tuple[str, ...]) -> bool:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for _, raw in zip(range(30), fh):
+                for ev in _mensagens(raw):
+                    if ev.kind == "user_msg":
+                        return (ev.text or "").lstrip().startswith(prefixos)
+    except OSError:
+        return False
+    return False
 
 
 def search(q: str, live_names: dict[str, str], limit: int = _MAX_HITS) -> list[SearchHit]:
-    """Trechos de conteudo em todos os transcripts .jsonl sob projects_dir.
+    """Mensagens de todas as contas que contêm TODAS as palavras de `q`, em qualquer ordem, sem
+    diferenciar maiúscula. Conversas mais recentes primeiro.
 
     `live_names`: realpath(jsonl) -> nome tmux das sessoes VIVAS (o mesmo join que o archive faz com
     registry.list()); marca `live` e carrega `session_name` pra a UI abrir o chat (viva) ou o arquivo
-    (morta). `q` blank/so-espaco -> []; truncada em _MAX_Q. Ordena por mtime desc (mais recente primeiro).
+    (morta). `q` blank/so-espaco -> [].
     """
-    q = (q or "").strip()
-    if not q:
+    t = termos(q)
+    if not t:
         return []
-    q = q[:_MAX_Q]
-    base = Path(settings.projects_dir)
-    if not base.is_dir():
+    bases = [str(base) for _, _, base in _contas() if base.is_dir()]
+    if not bases:
         return []
-    # LISTA de argumentos (sem shell). -F: q e string literal. -e q: q vai como VALOR da flag (mesmo
+    # LISTA de argumentos (sem shell). -F: termo literal. -e: vai como VALOR da flag (mesmo
     # comecando com '-' nao vira flag). --no-ignore: nao pular transcript por um .gitignore/ignore.
+    # O rg filtra pelo termo mais longo (o mais raro, em geral); os outros conferem na mensagem.
+    # --sortr=modified: o teto global corta a varredura, e o que sobra tem de ser o mais recente.
+    # Modo texto com -M, não --json: o --json ignora o -M e despejava centenas de MB de contexto
+    # injetado e saída de ferramenta só pra serem descartados aqui. --null separa o caminho.
     argv = [
-        _rg(), "--json", "-F", "--no-messages", "--no-ignore",
-        "-m", str(_MAX_PER_FILE),
+        _rg(), "-F", "-i", "-M", str(_MAX_COLUNAS), "--null", "--no-heading", "--with-filename",
+        "--no-line-number", "--color", "never", "--no-messages", "--no-ignore", "--sortr=modified",
+        "-m", str(_MAX_LINHAS_POR_ARQUIVO),
         "--max-filesize", _MAX_FILESIZE,
-        "-g", "*.jsonl",
-        "-e", q, "--", str(base),
+        "-g", "*.jsonl", "-g", "!**/subagents/**",
+        "-e", max(t, key=len), "--", *bases,
     ]
     try:
         proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
@@ -128,20 +166,22 @@ def search(q: str, live_names: dict[str, str], limit: int = _MAX_HITS) -> list[S
         return []
     hits: list[SearchHit] = []
     cwd_cache: dict[str, Optional[str]] = {}  # realpath -> cwd real (1 leitura de cabecalho/arquivo)
+    por_arquivo: dict[str, int] = {}
+    internos: dict[str, bool] = {}
+    prefixos = _prefixos_internos()
     try:
-        for raw in (proc.stdout or []):
+        for saida in (proc.stdout or []):
             if len(hits) >= limit:
                 break   # teto global: para de ler (a leitura por streaming nao bufferiza o mundo)
-            try:
-                obj = json.loads(raw)
-            except (ValueError, TypeError):
+            path, sep, line = saida.partition("\0")
+            if not sep or por_arquivo.get(path, 0) >= _MAX_PER_FILE:
                 continue
-            if not isinstance(obj, dict) or obj.get("type") != "match":
+            casadas = [ev for ev in _mensagens(line) if all(x in (ev.text or "").lower() for x in t)]
+            if not casadas:
                 continue
-            data = obj.get("data") or {}
-            path = ((data.get("path") or {}).get("text")) or ""
-            line = ((data.get("lines") or {}).get("text")) or ""
-            if not path:
+            if path not in internos:
+                internos[path] = _interno(path, prefixos)
+            if internos[path]:
                 continue
             p = Path(path)
             real = os.path.realpath(path)
@@ -163,10 +203,13 @@ def search(q: str, live_names: dict[str, str], limit: int = _MAX_HITS) -> list[S
                 mtime = os.path.getmtime(path)
             except OSError:
                 mtime = 0.0
-            hits.append(SearchHit(
-                project=p.parent.name, session_id=p.stem, session_name=name,
-                cwd=cwd_cache[real], line=_snippet(line, q), mtime=mtime, live=name is not None,
-            ))
+            for ev in casadas[:_MAX_PER_FILE - por_arquivo.get(path, 0)]:
+                hits.append(SearchHit(
+                    project=p.parent.name, session_id=p.stem, session_name=name,
+                    cwd=cwd_cache[real], line=_snippet(ev.text or "", t), mtime=mtime, live=name is not None,
+                    role="user" if ev.kind == "user_msg" else "assistant", event_id=ev.id, ts=ev.ts,
+                ))
+                por_arquivo[path] = por_arquivo.get(path, 0) + 1
     finally:
         if proc.stdout:
             proc.stdout.close()

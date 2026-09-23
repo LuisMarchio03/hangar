@@ -2,6 +2,9 @@
   import { computeEditDiff, extractEdits, extractFilePath, pseudoCaminhoPorConteudo, type ChatEvent } from '@hangar/core';
   import * as m from '../paraglide/messages';
   import { parseFilePaths, summarizeToolInput, summarizeToolResult, toolPhase, toolVerbo } from '@hangar/core';
+  import { getBashOutput, getToolProgress, nomeFerramenta, separarComando, type EtapaFerramenta } from '@hangar/core';
+  import { copyText } from '../lib/clipboard';
+  import { fmtDur } from '../lib/fmt';
   import FileIcon from './files/FileIcon.svelte';
   import { toolLook } from '../lib/toolLook.svelte';
   import { caminhoDeCodigoNoComando } from '../lib/codeFromBash';
@@ -164,12 +167,141 @@
   const isBackground = $derived(
     event.tool_name === 'Bash' && (event.tool_input as Record<string, unknown> | null)?.['run_in_background'] === true
   );
+
+  // MCP: o resumo de uma linha corta o pedido, e o progresso do MCP não chega pelo transcript.
+  // As etapas vêm do arquivo que o próprio MCP grava (GET tool-progress), enquanto o cartão está aberto.
+  const ehMcp = $derived((event.tool_name ?? '').startsWith('mcp__'));
+  const pedidoMcp = $derived(
+    ehMcp
+      ? Object.entries(event.tool_input ?? {}).map(([k, v]) =>
+          ({ campo: k, texto: typeof v === 'string' ? v : JSON.stringify(v, null, 2), prosa: typeof v === 'string' }))
+      : [],
+  );
+  // A linha do Bash corta o comando; aberto, ele aparece inteiro (rodando, é só o que há pra ver).
+  const comandoInteiro = $derived(event.tool_name === 'Bash' && !hangarAcao ? comandoBash : '');
+  const partesComando = $derived(comandoInteiro ? separarComando(comandoInteiro) : []);
+  let verOriginal = $state(false);
+  let copiado = $state<'cmd' | 'saida' | null>(null);
+  async function copiar(qual: 'cmd' | 'saida', texto: string) {
+    await copyText(texto);
+    copiado = qual;
+    setTimeout(() => { if (copiado === qual) copiado = null; }, 1500);
+  }
+  const linhasSaida = $derived.by(() => {
+    const n = String(result?.result ?? '').replace(/\n+$/, '').split('\n').length;
+    return n === 1 ? m.formato_linha_1() : m.formato_linhas({ n });
+  });
+
+  let saidaViva = $state<string | null>(null);
+  let caixaViva = $state<HTMLPreElement | null>(null);
+  $effect(() => {
+    const cmd = comandoInteiro;
+    if (!cmd || !expanded || phase !== 'pending') return;
+    let vivo = true;
+    const ler = () => getBashOutput(sessionName, cmd).then((t) => { if (vivo) saidaViva = t; }).catch(() => {});
+    void ler();
+    const timer = setInterval(ler, 2000);
+    return () => { vivo = false; clearInterval(timer); };
+  });
+  $effect(() => {
+    if (caixaViva && saidaViva) caixaViva.scrollTop = caixaViva.scrollHeight;
+  });
+
+  let agora = $state(Date.now());
+  $effect(() => {
+    if (phase !== 'pending' || !event.ts) return;
+    agora = Date.now();
+    const t = setInterval(() => { agora = Date.now(); }, 1000);
+    return () => clearInterval(t);
+  });
+  const rodandoHa = $derived(phase === 'pending' && event.ts ? fmtDur(Math.max(0, agora - event.ts * 1000)) : null);
+  // Duração no desfecho só onde espera é informação (comando e MCP), e só quando passa de 2 s.
+  const statusLinha = $derived(
+    rodandoHa && (comandoInteiro || ehMcp) ? m.tool_executando_ha({ tempo: rodandoHa })
+      : phase === 'done' && (comandoInteiro || ehMcp) && duracao !== null && duracao >= 2000
+        ? `${outcome} · ${fmtDur(duracao)}` : outcome,
+  );
+  function tempoDaEtapa(i: number): string {
+    if (phase === 'pending' && i === etapas.length - 1) return m.tool_etapa_agora();
+    const t0 = etapas[0]?.t, ti = etapas[i]?.t;
+    if (i === 0 || t0 == null || ti == null) return i === 0 ? '0s' : '';
+    return `+${fmtDur((ti - t0) * 1000)}`;
+  }
+  let etapas = $state<EtapaFerramenta[]>([]);
+  $effect(() => {
+    const id = event.tool_use_id;
+    if (!ehMcp || !expanded || !id) return;
+    let vivo = true;
+    const ler = () => getToolProgress(sessionName, id).then((e) => { if (vivo) etapas = e; }).catch(() => {});
+    void ler();
+    const timer = phase === 'pending' ? setInterval(ler, 2000) : undefined;
+    return () => { vivo = false; clearInterval(timer); };
+  });
 </script>
 
 <!-- O DETALHE e identico nas duas peles: e o mesmo dado, so a moldura muda. Snippet pra existir uma
      vez so — duplicar estas tres pontas era o jeito de a pele nova perder o diff ou o erro. -->
 {#snippet detalhe()}
-  {#if showDiff && editEdits}
+  {#if comandoInteiro}
+    <div class="bloco">
+      <div class="bloco-rot">
+        <span>{m.tool_comando()}</span>
+        <span>
+          {#if partesComando.length > 1}
+            <button type="button" class="link" onclick={(e) => { e.stopPropagation(); verOriginal = !verOriginal; }}>
+              {verOriginal ? m.tool_ver_separado() : m.tool_ver_original()}</button> ·
+          {/if}
+          <button type="button" class="link" onclick={(e) => { e.stopPropagation(); void copiar('cmd', comandoInteiro); }}>
+            {copiado === 'cmd' ? m.tool_copiado() : m.tool_copiar()}</button>
+        </span>
+      </div>
+      <pre class="caixa">{#if verOriginal || partesComando.length < 2}<span class="prompt">$ </span>{comandoInteiro}{:else}{#each partesComando as parte, i (i)}<span class="prompt">{i === 0 ? '$ ' : '  '}</span>{parte}{i < partesComando.length - 1 ? '\n' : ''}{/each}{/if}</pre>
+    </div>
+    {#if phase === 'pending' && saidaViva}
+      <div class="bloco">
+        <div class="bloco-rot"><span>{m.tool_saida()} · {m.tool_saida_ao_vivo()}</span></div>
+        <pre class="caixa saida" bind:this={caixaViva}>{saidaViva}</pre>
+      </div>
+    {/if}
+    {#if result?.result && !showDiff}
+      <div class="bloco">
+        <div class="bloco-rot">
+          <span>{m.tool_saida()} · {linhasSaida}</span>
+          <button type="button" class="link" onclick={(e) => { e.stopPropagation(); void copiar('saida', String(result?.result ?? '')); }}>
+            {copiado === 'saida' ? m.tool_copiado() : m.tool_copiar()}</button>
+        </div>
+        {#if temRealce}
+          <div class="caixa saida" use:rolagemSoAoClicar><ReadView path={caminhoRealce} text={result.result} /></div>
+        {:else}
+          <pre class="caixa saida" use:rolagemSoAoClicar>{result.result}</pre>
+        {/if}
+      </div>
+    {/if}
+  {/if}
+  {#if ehMcp}
+    {#if pedidoMcp.length}
+      <div class="bloco">
+        <div class="bloco-rot"><span>{m.tool_mcp_pedido()}</span></div>
+        {#each pedidoMcp as item, i (item.campo)}
+          {#if i > 0 || !item.prosa}<div class="campo">{item.campo}</div>{/if}
+          {#if item.prosa}<div class="pedido-txt">{item.texto}</div>{:else}<pre class="caixa">{item.texto}</pre>{/if}
+        {/each}
+      </div>
+    {/if}
+    {#if etapas.length}
+      <div class="bloco">
+        <div class="bloco-rot"><span>{m.tool_mcp_etapas()} · {etapas.length}</span></div>
+        <ol class="etapas">
+          {#each etapas as etapa, i (i)}
+            <li class:agora={phase === 'pending' && i === etapas.length - 1}>{etapa.message}<span class="tempo">{tempoDaEtapa(i)}</span></li>
+          {/each}
+        </ol>
+      </div>
+    {/if}
+  {/if}
+  {#if comandoInteiro}
+    <!-- Bash: comando e saída já saíram nos blocos acima. -->
+  {:else if showDiff && editEdits}
     <div class="row-result row-result--diff" use:rolagemSoAoClicar>
       <EditDiff path={editPath} edits={editEdits} />
     </div>
@@ -236,7 +368,7 @@
       {:else if totaisEdicao}
         <span class="tc-fim"><span class="tc-add">+{totaisEdicao.add}</span>{#if totaisEdicao.del} <span class="tc-del">−{totaisEdicao.del}</span>{/if}</span>
       {:else}
-        <span class="tc-fim">{outcome}</span>
+        <span class="tc-fim">{statusLinha}</span>
       {/if}
     </button>
 
@@ -262,19 +394,19 @@
   aria-expanded={ehAgente ? undefined : expanded}
   aria-label={ehAgente ? m.tool_abrir_agente() : undefined}
   onclick={aoClicar}
-  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); aoClicar(); } }}
+  onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); aoClicar(); } }}
 >
   <div class="tr-call">
     <span class="tr-dot" class:pending={phase === 'pending'} data-phase={phase} aria-hidden="true"></span>
-    <span class="tr-name">{event.tool_name ?? m.formato_tool_generico()}</span>
+    <span class="tr-name">{nomeFerramenta(event.tool_name)}</span>
     {#if isBackground}<span class="tr-badge">{m.tool_background()}</span>{/if}
     {#if summary}<span class="tr-arg" class:open={expanded}>{summary}</span>{/if}
   </div>
 
   <div class="tr-out">
     <span class="tr-elbow" aria-hidden="true"></span>
-    <span class="tr-outcome">{outcome}</span>
-    {#if result?.result || showDiff}
+    <span class="tr-outcome">{statusLinha}</span>
+    {#if result?.result || showDiff || ehMcp || comandoInteiro}
       <span class="tr-hint">
         <span class="sep" aria-hidden="true">•</span>
         <span class="coarse">{expanded ? m.tool_toque_ocultar() : m.tool_toque_ver()}</span><span
@@ -586,8 +718,62 @@
     color: var(--text-secondary);
     line-height: 1.35;
     white-space: pre-wrap;
-    word-break: break-all;
+    overflow-wrap: anywhere;
   }
+
+  /* Detalhe de comando e MCP: rótulo + caixa, texto maior e mais claro que o resultado cru. */
+  .bloco { margin: var(--space-2) 0 0 14px; }
+  .bloco-rot {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+  .bloco-rot > span { display: inline-flex; align-items: center; gap: 4px; }
+  .link {
+    min-height: 0;
+    min-width: 0;
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    color: var(--accent);
+    cursor: pointer;
+  }
+  .caixa {
+    margin: 0;
+    padding: 8px 12px;
+    background: var(--surface-inset);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-xs);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    line-height: 1.6;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    cursor: text;
+  }
+  .caixa.saida { color: var(--text-secondary); max-height: 260px; overflow-y: auto; }
+  .prompt { color: var(--accent); user-select: none; }
+  .pedido-txt { font-size: var(--text-sm); line-height: 1.55; color: var(--text-primary); white-space: pre-wrap; }
+  .campo { font-size: var(--text-xs); color: var(--text-muted); margin: 6px 0 2px; }
+  .etapas { list-style: none; margin: 0; padding: 0; }
+  .etapas li { position: relative; padding: 0 0 8px 20px; font-size: var(--text-sm); color: var(--text-primary); }
+  .etapas li::before {
+    content: ''; position: absolute; left: 4px; top: 0.5em;
+    width: 7px; height: 7px; border-radius: 50%; background: var(--success);
+  }
+  .etapas li::after {
+    content: ''; position: absolute; left: 7px; top: calc(0.5em + 9px); bottom: 0;
+    width: 1px; background: var(--border-default);
+  }
+  .etapas li:last-child::after { display: none; }
+  .etapas li.agora { font-weight: 600; }
+  .etapas li.agora::before { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+  .tempo { margin-left: 6px; font-size: var(--text-xs); font-weight: 400; color: var(--text-muted); }
 
   /* O diff ja tem a propria moldura/superficie — sem a bordinha lateral do resultado cru, e sem
      o teto de 240px (o EditDiff tem o proprio scroll interno). */

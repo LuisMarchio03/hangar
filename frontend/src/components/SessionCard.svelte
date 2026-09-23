@@ -6,8 +6,6 @@ import { textoProblema } from '../lib/problema';
   import { cwdParts, rotuloEstado, stateColors, untrackedReason, providerTag, relativeTime, fmtWhen } from '@hangar/core';
   import { chipDaConta } from '../lib/conta';
   import { loopBadge, LOOP_TONE_COLOR } from '@hangar/core';
-  import { planBadge } from '@hangar/core';
-  import PlanBar from './PlanBar.svelte';
   import IconFolder from './icons/IconFolder.svelte';
   import IconWorktree from './icons/IconWorktree.svelte';
   import StateChip from './StateChip.svelte';
@@ -94,7 +92,6 @@ import { textoProblema } from '../lib/problema';
   const contaChip = $derived(chipDaConta(session.conta));
 
   const loopChip = $derived(loopBadge(session.loop_status, session.loop_iter, session.loop_max));
-  const planChip = $derived(planBadge(session));
   // Provider da linha — só as não-Claude ganham chip (ver providerTag em lib/format).
   const provTag = $derived(providerTag(session.provider));
   // Tempo relativo da última atividade ("51 min atrás" — o "51m ago" do card do super.engineering).
@@ -423,7 +420,7 @@ import { textoProblema } from '../lib/problema';
       <!-- 🤝 grupo, ⏳ rate-limit, 🔁 loop e ⚙ motor, no fluxo da coluna de texto (na row-right
            esmagavam o nome — visto no iPhone). A linha só existe quando tem chip: a marca do agente
            subiu pra linha do nome e a conta também, e sem elas sobrava uma linha inteira vazia. -->
-      {#if session.pair_peers?.length || loopChip || planChip || session.engine}
+      {#if session.pair_peers?.length || loopChip || session.engine}
       <span class="badges-line">
           {#if session.pair_peers?.length}
             <span class="paired-chip" title={m.sessao_grupo_com({ n: session.pair_peers.join(', ') })}><GroupGlyph size={12} />&nbsp;{session.pair_peers.length === 1 ? session.pair_peers[0] : session.pair_peers.length + 1}</span>
@@ -435,9 +432,6 @@ import { textoProblema } from '../lib/problema';
               title={m.sessao_loop_runner()}
             >{loopChip.label}</span>
           {/if}
-          {#if planChip}
-            <span class="plan-chip" class:plan-chip--done={planChip.complete} title={planChip.title}>{planChip.label}</span>
-          {/if}
           {#if session.engine}
             <!-- Sem isto nada na lista distingue uma sessão de motor de uma da conta Anthropic. NÃO
                  mostramos custo aqui: o preço que o Claude Code calcula é tabela Anthropic e mentiria. -->
@@ -445,7 +439,6 @@ import { textoProblema } from '../lib/problema';
           {/if}
         </span>
       {/if}
-      <PlanBar {session} />
       <!-- Retomar e Claude-only de ponta a ponta (candidatos de ~/.claude/projects + relance com
            `claude --resume`): numa sessao Pi/Kimi/OMP o botao so poderia errar, entao mostramos a
            razao no lugar dele. O backend recusa igual, pra um cliente velho nao matar o pane. -->
@@ -923,26 +916,6 @@ import { textoProblema } from '../lib/problema';
     text-overflow: ellipsis;
     color: var(--accent);
     background: var(--accent-dim);
-  }
-
-  /* Progresso do plano do superpowers (Task 3). */
-  .plan-chip {
-    padding: 1px 6px;
-    border-radius: var(--radius-full);
-    background: var(--accent-dim);
-    color: var(--accent);
-    font-size: 10px;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-    /* O rotulo agora carrega o NOME do plano, que e longo e variavel: sem teto ele empurrava o resto
-       da linha de chips pra fora. Corta o nome com reticencias e mantem a linha inteira. */
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 22ch;
-  }
-  .plan-chip--done {
-    background: color-mix(in srgb, var(--success) 14%, transparent);
-    color: var(--success);
   }
 
   /* Motor de modelo (Task 5): sessao rodando fora da conta Anthropic. */

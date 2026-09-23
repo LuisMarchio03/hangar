@@ -282,10 +282,12 @@
   );
   /**
    * Dá pra reiniciar daqui? Só quando o disco está à frente do processo E a máquina roda por
-   * systemd — nas outras topologias quem derruba e sobe o servidor é o instalador, e o backend
-   * recusa (409). Sem o botão, a única saída era descobrir o comando do serviço por conta.
+   * serviço (systemd ou tarefa do Windows) — na instalação manual não há o que reiniciar e o
+   * backend recusa (409). Sem o botão, a única saída era descobrir o comando do serviço por conta.
    */
-  const podeReiniciar = $derived(versoesDivergem && dados?.pre_voo?.topologia === 'systemd');
+  const podeReiniciar = $derived(
+    versoesDivergem && (dados?.pre_voo?.topologia === 'systemd' || dados?.pre_voo?.topologia === 'windows'),
+  );
   /** Checkout numa branch que não é a main: o backend recusa atualizar, e a tela não oferece. */
   const branchDeTrabalho = $derived(!!dados?.pre_voo?.branch_de_trabalho);
   let reiniciando = $state(false);

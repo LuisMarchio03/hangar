@@ -9,6 +9,7 @@ from app.adapters.codex import sessions
 
 class Client:
     closed = False
+    server_requests = {}
 
     def __init__(self):
         self.calls = []
@@ -19,7 +20,7 @@ class Client:
         if self.fail == method:
             raise RuntimeError("turno encerrado")
         if method == "thread/read":
-            return {"thread": {"model": "gpt-6-astra", "reasoningEffort": "high"}}
+            return {"thread": {"model": "gpt-6-astra", "reasoningEffort": "high", "status": {"type": "idle"}}}
         if method == "skills/list":
             return {"data": [{"skills": [
                 {"name": "revisar", "path": "/skills/revisar/SKILL.md", "enabled": True},
@@ -64,6 +65,62 @@ async def test_skill_usa_identidade_nativa_e_mantem_texto_para_historico(chat):
                                {"type": "skill", "name": "revisar", "path": "/skills/revisar/SKILL.md"}]
     assert "model" not in params and "effort" not in params
     assert [s["name"] for s in await adapter.list_skills("sess")] == ["revisar"]
+
+
+async def test_compact_uses_native_rpc_without_prompt_or_queue(chat, monkeypatch):
+    from app import api
+    adapter, client = chat
+    monkeypatch.setattr(api, "get_adapter", lambda _: adapter)
+    monkeypatch.setattr(api.PromptQueue, "append", lambda *a, **k: pytest.fail("comando foi enfileirado"))
+    result = await api._send_one_codex_locked("sess", "/compact")
+    assert result["ok"] and result["delivered"]
+    assert client.calls[-1] == ("thread/compact/start", {"threadId": "thread-1"})
+    assert not any(method in {"turn/start", "skills/list"} for method, _ in client.calls)
+    assert adapter._sessions["sess"]["in_progress"]
+
+
+async def test_compact_failure_is_reported_without_starting_a_turn(chat):
+    adapter, client = chat
+    client.fail = "thread/compact/start"
+    with pytest.raises(RuntimeError):
+        await adapter.compact("sess")
+    assert not adapter._sessions["sess"]["in_progress"]
+
+
+async def test_compact_refuses_active_turn(chat):
+    adapter, client = chat
+    original = client.request
+    async def request(method, params):
+        if method == "thread/read":
+            return {"thread": {"status": {"type": "active"}}}
+        return await original(method, params)
+    client.request = request
+    with pytest.raises(ValueError, match="Espere"):
+        await adapter.compact("sess")
+    assert not client.calls
+
+
+async def test_state_stream_follows_replaced_transport(chat, monkeypatch):
+    from app.state import StateEvent
+    adapter, original = chat
+    replacement = Client()
+    async def stream(name):
+        first = adapter._sessions[name]["client"] is original
+        yield StateEvent(session=name, state="idle", headless=first)
+        if first:
+            adapter._sessions[name]["client"] = replacement
+    monkeypatch.setattr(adapter, "_state_stream", stream)
+    states = [event async for event in adapter.state_monitor("sess", lambda: "thread-1")]
+    assert [event.headless for event in states] == [True, False]
+
+
+async def test_state_stream_reports_connection_failure(chat, monkeypatch):
+    from unittest.mock import AsyncMock
+    adapter, _ = chat
+    adapter._sessions.clear()
+    monkeypatch.setattr(adapter, "ensure_running", AsyncMock(side_effect=RuntimeError("sem conexão")))
+    states = [event async for event in adapter.state_monitor("sess", lambda: "thread-1")]
+    assert len(states) == 1 and states[0].state == "dead"
 
 
 async def test_orientar_exige_turno_atual_e_nao_inicia_outro(chat):

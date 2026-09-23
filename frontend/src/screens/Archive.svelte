@@ -18,7 +18,7 @@ import { intlLocale } from '../lib/locale';
     onBack: () => void;
     // Deep-link vindo da busca (feature #10): abre direto uma conversa arquivada de um servidor
     // especifico, sem passar pela navegacao pasta-a-pasta.
-    deepLink?: { serverId: string; project: string; sessionId: string } | null;
+    deepLink?: { serverId: string; project: string; sessionId: string; eventId?: string | null } | null;
   }
   let { onBack, deepLink = null }: Props = $props();
 
@@ -216,6 +216,7 @@ import { intlLocale } from '../lib/locale';
         onSelectOption={noop}
         onCancel={noop}
         imageUrl={(id, idx) => archiveImageUrl(sel.project, sel.session_id, id, idx)}
+        focoId={deepLink?.sessionId === sel.session_id ? (deepLink.eventId ?? null) : null}
       />
     {/if}
   </div>

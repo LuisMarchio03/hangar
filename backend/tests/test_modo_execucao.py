@@ -191,6 +191,23 @@ def cliente(monkeypatch):
 _H = {"Authorization": "Bearer secret"}
 
 
+@pytest.mark.parametrize("terminal", [True, False])
+def test_codex_switches_in_both_directions(cliente, terminal):
+    from app.adapters.codex.adapter import CodexAdapter
+    from app.models import SessionInfo
+    codex = CodexAdapter()
+    codex.open_terminal = AsyncMock()
+    codex.open_headless = AsyncMock()
+    info = SessionInfo(name="cx", cwd="/tmp", provider="codex", headless=terminal)
+    with patch("app.api._cached_info", AsyncMock(return_value=info)), \
+         patch("app.api.get_adapter", return_value=codex), \
+         patch("app.api.registry._forget"):
+        result = cliente.post("/api/sessions/cx/modo-execucao", headers=_H, json={"terminal": terminal})
+    assert result.status_code == 200 and result.json() == {"ok": True, "terminal": terminal}
+    (codex.open_terminal if terminal else codex.open_headless).assert_awaited_once_with("cx")
+    (codex.open_headless if terminal else codex.open_terminal).assert_not_awaited()
+
+
 def test_troca_com_turno_em_voo_da_409_e_nao_mexe(cliente, monkeypatch):
     from app.models import SessionInfo
     import app.api as api_mod

@@ -20,6 +20,9 @@
 #                                  exato. --tmux força o caminho antigo.
 #   hangar-send --new <nome> [cwd]     cria sessão nova, com terminal gerenciado ou headless.
 #                                  cwd default = home.
+#   hangar-send --new <servidor>::<nome> [cwd]  idem, NOUTRO servidor (peers.json), com as mesmas
+#                                  flags. cwd, --conta e --conta auto são resolvidos LÁ (cwd default
+#                                  = home de lá; --conta pelo nome da conta de lá).
 #                                  --provider <claude|codex|pi|omp|kimi> escolhe o AGENTE da sessão
 #                                  nova (default claude). Ex: --provider kimi abre o Kimi Code.
 #                                  --read-only bloqueia escrita no código e metadados Git (Linux/bwrap).
@@ -60,27 +63,18 @@
 # id -> {base_url, token} dos outros servidores, e CP_SERVER_ID no backend/.env é o id DESTA
 # máquina — vira o endereço de resposta ([de: <id>::<sessao>]) quando o recado cruza servidor.
 # --pair cross-server (servidor::sessao) FUNCIONA (1:1): o backend local resolve peers.json + chama
-# o /pair-remote do outro. ponytail: --group cross-server ainda não existe — só recado 1:1 e --list.
+# o /pair-remote do outro. --new servidor::nome cria lá pela API do outro. ponytail: --group
+# cross-server ainda não existe — só recado 1:1, --pair, --new e --list.
 #
-# CAMINHO NATIVO (Claude Code 2.1.224+): o Claude Code entrega recado entre sessões da mesma máquina
-# por socket, sem digitar no terminal — some a classe de bug do send-keys (texto cortado no teto de
-# 16KB do tmux, \n submetendo linha, reenvio concatenando no composer), e o recado entra no MEIO do
-# turno do destino, entre duas ferramentas, em vez de esperar ele ficar ocioso. Quando esse caminho
-# alcança os DOIS lados, o recado 1:1 local aqui é RECUSADO com a instrução de usar `SendMessage`.
-# A checagem é por FATO nos dois lados, nunca por suposição:
-#   - remetente: $CLAUDE_CODE_MESSAGING_SOCKET, que o Claude Code exporta pro Bash de quem TEM;
-#   - destino:   /api/sessions/<alvo>/peer-address devolve o socket de inbox dele, ou null.
-# Faltando qualquer um dos dois (sessão aberta antes da liberação, Codex, Pi, outra máquina), envia
-# como sempre — recusar ali mandaria o modelo bater numa porta que não existe. --group, --pair,
-# --new e cross-server nunca são recusados: não têm equivalente nativo.
-#
-# ESCADA DE TRANSPORTE (recado 1:1 pra sessão Claude desta máquina), um degrau só depois que o
-# anterior falhou: (0) olhe o pane do destino — overlay/menu aberto recusa digitação e é o que o
-# backend reporta como "sessão indisponível"; (1) SendMessage, quando o alvo aparece em ListAgents;
-# (2) `hangar-send --tmux <sessao>` — também quando ListAgents vem VAZIO, que acontece; (3)
-# `tmux send-keys` no pane. Destino SEM terminal (--headless): não há pane, os degraus 0 e 3 não
-# existem e o (2) é o último — ele entra pela fila da API. Recusa da FERRAMENTA se contorna
-# subindo o degrau; recusa do DESTINATÁRIO, não. A mensagem é ARGUMENTO, nunca stdin: heredoc cru
+# TRANSPORTE É DO BACKEND, NUNCA DO MODELO. Pra sessão Claude desta máquina o backend escreve o
+# recado direto no socket nativo do Claude Code (`cc-socks/<pid>.sock`, o mesmo do SendMessage):
+# sem digitar no terminal, sem teto de 16KB, sem \n submetendo linha, e entra no MEIO do turno do
+# destino. Sem socket (sessão aberta antes da liberação, Codex, Pi, outra máquina) cai pro plugin,
+# pro tmux ou pra fila durável, nesta ordem. A saída diz o que aconteceu: "entregue agora …
+# (socket nativo…)", "entregue", "na fila" ou erro. Não existe "use outra ferramenta": se este
+# comando não entregou, ele diz que não entregou. `--tmux` fica aceito e é ignorado.
+# Retenção ou recusa pelo destino (política crossSessionInbound dele) chega depois como aviso
+# `[painel: hangar]` na sessão remetente. A mensagem é ARGUMENTO, nunca stdin: heredoc cru
 # (`hangar-send <s> <<'EOF'`) dá erro de uso e nada sai. Texto com crase ou $ vai assim:
 #   hangar-send <sessao> "$(cat <<'EOF'
 #   ...texto livre...
@@ -293,9 +287,14 @@ if [[ "$1" == "--new" ]]; then
     shift
     name="${1:?uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--profile <nome>] [--headless] [--jev|--sem-jev]}"
     shift
+    # servidor::nome cria a sessão NOUTRA máquina, pela API dela (peers.json), igual ao recado.
+    remoto=""
     if [[ "$name" == *::* ]]; then
-        echo "erro: '::' é reservado pro endereço servidor::sessao — escolha outro nome" >&2
-        exit 2
+        remoto="${name%%::*}"; name="${name#*::}"
+        if [[ -z "$remoto" || -z "$name" || "$name" == *::* ]]; then
+            echo "erro: use servidor::nome (um '::' só)" >&2
+            exit 2
+        fi
     fi
     # Nome começando com '-' = o nome foi esquecido e uma FLAG virou nome. Sem esta guarda,
     # `hangar-send --new --engine kimi` criava uma sessão chamada "--engine", com cwd "kimi" e o motor
@@ -367,6 +366,37 @@ if [[ "$1" == "--new" ]]; then
                else echo "erro: argumento inesperado '$1'" >&2; exit 2; fi ;;
         esac
     done
+    if [[ -n "$remoto" ]]; then
+        cfg=$(peer_cfg "$remoto") || exit 1
+        IFS=$'\t' read -r BASE rtok <<< "$cfg"
+        AUTH="Authorization: Bearer $rtok"
+        API_PEER=""; API_CONNECT_TIMEOUT=8
+        # O $HOME e o hangar-conta são DESTA máquina: pasta padrão e conta vêm das contas de LÁ.
+        # A home é a mãe da conta `default` (~/.claude); `--conta auto` segue abaixo, já contra lá.
+        if [[ -z "$cwd" || ( -n "$conta" && "$conta" != "auto" ) ]]; then
+            configs=$(api GET /api/claude-configs) || exit 1
+            IFS=$'\t' read -r home_remota config_dir < <(python3 -c 'import json,sys
+cs = json.loads(sys.argv[1]); conta = sys.argv[2]
+base = next((c["path"] for c in cs if c.get("label") == "default"), "")
+sep = "\\" if "\\" in base else "/"
+home = base.rsplit(sep, 1)[0] if base else ""
+achada = ""
+if conta and conta != "auto":
+    for c in cs:
+        nome = c["path"].replace("\\", "/").rsplit("/", 1)[-1]
+        if conta in (c.get("label"), nome, ".claude-" + conta):
+            achada = c["path"]
+print(home + "\t" + achada)' "$configs" "$conta")
+            if [[ -n "$conta" && "$conta" != "auto" && -z "$config_dir" ]]; then
+                echo "erro: conta '$conta' não existe em '$remoto' — lá há: $(python3 -c 'import json,sys; print(", ".join(c["label"] for c in json.loads(sys.argv[1])))' "$configs")" >&2
+                exit 2
+            fi
+            if [[ -z "$cwd" ]]; then
+                [[ -z "$home_remota" ]] && { echo "erro: não achei a home de '$remoto' — informe a pasta: hangar-send --new $remoto::$name <cwd>" >&2; exit 2; }
+                cwd="$home_remota"
+            fi
+        fi
+    fi
     cwd="${cwd:-$HOME}"
     # Os demais providers dependem de pane; parar antes do POST evita criação incoerente.
     if [[ -n "$headless" && -n "$provider" && "$provider" != "claude" && "$provider" != "codex" ]]; then
@@ -385,6 +415,10 @@ if [[ "$1" == "--new" ]]; then
         }
         IFS=$'\t' read -r config_dir conta < <(python3 -c 'import json,sys
 s = json.load(sys.stdin); print(s["path"] + "\t" + s["label"])' <<<"$sugestao")
+        if [[ -z "$config_dir" || -z "$conta" ]]; then
+            echo "erro: resposta da cota ilegível em $BASE — escolha uma conta: --conta <nome>" >&2
+            exit 2
+        fi
         echo "conta escolhida pela cota: $conta" >&2
     fi
     if [[ -n "$conta" && "$config_dir" == "" ]]; then
@@ -424,7 +458,8 @@ if sys.argv[12]:
     d["jev"] = sys.argv[12] == "true"
 print(json.dumps(d))' \
            "$name" "$cwd" "$engine" "$provider" "$config_dir" "$model" "$effort" "$permissao" "$perfil" "$read_only" "$headless" "$jev")
-    api POST /api/sessions "$body" >/dev/null
+    api POST /api/sessions "$body" >/dev/null || exit 1
+    [[ -n "$remoto" ]] && name="$remoto::$name"
     echo "sessão criada: $name ($cwd)${headless:+ [sem terminal]}${provider:+ [$provider]}${engine:+ [motor: $engine]}${conta:+ [conta: $conta]}${model:+ [modelo: $model]}${effort:+ [esforço: $effort]}${permissao:+ [permissão: $permissao]}${perfil:+ [perfil: $perfil]}${jev:+ [jev: $jev]} — fala com ela via: hangar-send $name \"msg\""
     exit 0
 fi
@@ -453,16 +488,6 @@ entregues = [p for p in d["peers"] if p not in pul]
 if entregues: print("aviso enviado ao grupo:", ", ".join(entregues))
 w = d.get("warning")
 if w: print("  ⚠", w.get("msg", w))' "$resp"
-    pulados=$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(",".join(d.get("pulados", [])))' "$resp")
-    if [[ -n "$pulados" ]]; then
-        # stderr + código 3, como o 1:1: o modelo PRECISA ver que ainda não entregou a esses.
-        cat >&2 <<EOF
-pendente: $pulados têm o caminho nativo — mande a CADA um, via SendMessage, exatamente este texto:
-[grupo: $eu] $*
-(ou repita com --group --tmux pra digitar no terminal deles)
-EOF
-        exit 3
-    fi
     exit 0
 fi
 
@@ -478,38 +503,11 @@ if [[ "$target" == "$eu" || ( -n "$SERVER_ID" && "$target" == "$SERVER_ID::$eu" 
     exit 1
 fi
 
-# Caminho nativo alcança os DOIS lados? Então este envio é o pior dos dois — recusa e diz o certo.
-# Só pro 1:1 LOCAL: cross-server (`::`) cai fora pelo teste do alvo, e --group/--pair/--new nem
-# chegam aqui. Nunca "quase": faltando um dos lados, segue o envio de sempre.
-if [[ $forcar_tmux -eq 0 && -n "${CLAUDE_CODE_MESSAGING_SOCKET:-}" && "$target" != *::* ]]; then
-    # A consulta NUNCA impede o envio: falhando, segue pelo tmux, que é o caminho que sempre
-    # funciona. Mas falhar CALADO seria trocar "não tem socket" (o caso normal) por "a checagem
-    # quebrou" sem ninguém notar — endpoint em 500, token vencido, backend fora, JSON torto: tudo
-    # daria o mesmo silêncio. Guarda o erro e avisa no stderr, sem interromper (achado da revisão;
-    # é o mesmo princípio que o api() já aplica ao não mascarar o `detail` do backend).
-    erro_uds=""
-    if resposta=$(api GET "/api/sessions/$target/peer-address" 2>&1); then
-        uds=$(printf '%s' "$resposta" | python3 -c 'import json,sys
-try: print(json.load(sys.stdin).get("uds") or "")
-except Exception: sys.exit(9)' 2>/dev/null) || { uds=""; erro_uds="resposta não é o JSON esperado"; }
-    else
-        uds=""; erro_uds="$resposta"
-    fi
-    [[ -z "$erro_uds" ]] || echo "aviso: não deu pra checar o caminho nativo de '$target' ($(printf '%s' "$erro_uds" | head -1)); enviando pelo tmux" >&2
-    if [[ -n "$uds" ]]; then
-        # stderr + código 3: o modelo PRECISA ver que não entregou. Um aviso no stdout com código 0
-        # seria lido como sucesso e a mensagem sumiria sem ninguém notar.
-        cat >&2 <<EOF
-recusado: '$target' é sessão Claude desta máquina e o caminho nativo alcança os dois lados.
-Use a ferramenta SendMessage (o alvo aparece no ListAgents) — entrega por socket, sem digitar no
-terminal: não corta texto longo, não submete linha por linha, e chega no meio do turno dele.
-Se o ListAgents não listar '$target', repita este comando com --tmux que ele envia do jeito antigo.
-EOF
-        exit 3
-    fi
-fi
+# O transporte é decisão do backend (socket nativo do Claude → plugin → tmux → fila), nunca do
+# modelo: este script só entrega e diz o que aconteceu. `--tmux` fica aceito por compatibilidade.
 
 sender=$(me)
+curto="$sender"
 sess="$target"
 if [[ "$target" == *::* ]]; then
     # Destino em OUTRO servidor: resolve base/token no peers.json e qualifica o remetente —
@@ -524,13 +522,19 @@ if [[ "$target" == *::* ]]; then
     AUTH="Authorization: Bearer $rtok"
     sender="${SERVER_ID}::${sender}"
 fi
-text="[de: $sender] $*"
+# Modelo que escreve "[de: eu] …" por conta própria não ganha o prefixo em dobro — nem com o nome
+# curto num envio pra outro servidor, onde o remetente já virou "<servidor>::<eu>".
+msg="$*"
+for p in "$sender" "$curto"; do msg="${msg#"[de: $p] "}"; msg="${msg#"[de: $p]"}"; done
+text="[de: $sender] $msg"
 
 body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1], "steer": True}))' "$text")
 resp=$(api POST "/api/sessions/$sess/input" "$body")
 # delivered=True -> digitou agora na TUI; False -> fila durável (entrega quando a sessão ficar idle).
 # Sessão inexistente nem chega aqui (o backend responde 404 e o api() já mostrou o detail).
-if python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("steered") else 1)' "$resp"; then
+if python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("native") else 1)' "$resp"; then
+    echo "entregue agora -> $target (no socket do Claude dele, entra no meio do turno; retenção ou recusa pela política de lá chega depois como aviso [painel: hangar])"
+elif python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("steered") else 1)' "$resp"; then
     echo "entregue agora -> $target"
 elif python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("delivered") else 1)' "$resp"; then
     echo "entregue -> $target (não orientado no turno atual)"

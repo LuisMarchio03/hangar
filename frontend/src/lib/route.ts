@@ -8,7 +8,7 @@ export type Route =
   | { name: 'costs' }
   // Uso (#/uso): irmã da tela de custos — skills, tools, hooks e agentes mais chamados.
   | { name: 'uso' }
-  | { name: 'archive'; deepLink?: { serverId: string; project: string; sessionId: string } }
+  | { name: 'archive'; deepLink?: { serverId: string; project: string; sessionId: string; eventId?: string | null } }
   | { name: 'chat'; sessionName: string; serverId: string | null }
   // Quadro: sessionName/serverId preenchidos = overlay do card aberto por cima dele (#/board puro
   // = quadro sem overlay). Mesmo par de campos do 'chat' de propósito — é o que deixa o $effect
@@ -57,7 +57,8 @@ export function parseHash(hash: string): Route {
   if (path === '/uso') return { name: 'uso' };
   // Deep-link da busca (feature #10): #/archive/<serverId>/<project>/<sid> abre a conversa arquivada
   // direto no servidor dono. #/archive puro segue no browser normal de pastas.
-  const archiveDeep = path.match(/^\/archive\/([^/]+)\/([^/]+)\/([^/]+)$/);
+  // 4º segmento opcional: a mensagem onde a conversa abre (trecho escolhido na busca).
+  const archiveDeep = path.match(/^\/archive\/([^/]+)\/([^/]+)\/([^/]+)(?:\/([^/]+))?$/);
   if (archiveDeep) {
     return {
       name: 'archive',
@@ -65,6 +66,7 @@ export function parseHash(hash: string): Route {
         serverId: decodeURIComponent(archiveDeep[1]),
         project: decodeURIComponent(archiveDeep[2]),
         sessionId: decodeURIComponent(archiveDeep[3]),
+        eventId: archiveDeep[4] ? decodeURIComponent(archiveDeep[4]) : null,
       },
     };
   }

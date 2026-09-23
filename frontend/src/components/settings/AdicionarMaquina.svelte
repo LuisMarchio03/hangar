@@ -23,12 +23,13 @@
   interface Props {
     fallbackFocus?: HTMLElement | null;
     onFechar: () => void;
+    onAdicionada?: () => void;
     apiTarget?: Server | null;
     podeFalar?: boolean;
     enderecoInicial?: string;
     busca?: Busca;
   }
-  let { fallbackFocus = null, onFechar, apiTarget = null, podeFalar = false, enderecoInicial = '', busca }: Props = $props();
+  let { fallbackFocus = null, onFechar, onAdicionada, apiTarget = null, podeFalar = false, enderecoInicial = '', busca }: Props = $props();
   let tokenEl = $state<HTMLInputElement | null>(null);
 
   function usarAchado(d: MaquinaDescoberta) {
@@ -45,6 +46,9 @@
   let scanning = $state(false);
   let enderecoEl = $state<HTMLInputElement | null>(null);
   let falar = $state(false);   // é uma pergunta: quem quer, marca
+  // Ligado por padrão: é o que "adicionar servidor" sempre fez. Só é escolha quando há o outro
+  // lado (recado) pra ficar no lugar — máquina só pra recado, sem as sessões dela na lista.
+  let acompanhar = $state(true);
 
   // Link de pareamento colado inteiro: o token vai para o campo dele e o endereço fica só a origem.
   // Roda no blur, não no input — normalizar a cada tecla reescreveria o que a pessoa está digitando.
@@ -66,11 +70,16 @@
     }
     const tok = (n.token ?? token).trim();
     if (!tok || /\s/.test(tok)) { erro = m.maquinas_add_erro_token(); return; }
+    const soRecado = podeFalar && falar && !acompanhar;
+    if (podeFalar && !falar && !acompanhar) { erro = m.maquinas_add_erro_nenhum(); return; }
     ocupado = true;
     erro = '';
     let base = n.base;
+    // 20 s, não os 8 s padrão: daqui o probe sai do CELULAR pra máquina, e pela Tailscale em relay
+    // a primeira conexão passa de 8 s.
+    const PRAZO_MS = 20000;
     try {
-      await getConfigForServer({ id: 'candidato', label: base, baseUrl: base, token: tok });
+      await getConfigForServer({ id: 'candidato', label: base, baseUrl: base, token: tok }, PRAZO_MS);
     } catch (e) {
       const msg1 = e instanceof Error ? e.message : String(e);
       const respostaHttp = e instanceof Error && /^\d{3}:/.test(e.message);
@@ -81,7 +90,7 @@
       }
       base = n.alternativa;
       try {
-        await getConfigForServer({ id: 'candidato', label: base, baseUrl: base, token: tok });
+        await getConfigForServer({ id: 'candidato', label: base, baseUrl: base, token: tok }, PRAZO_MS);
       } catch (e2) {
         const msg2 = e2 instanceof Error ? e2.message : String(e2);
         erro = `${m.falha_conexao()}: ${msg1} · ${msg2}`;
@@ -96,14 +105,22 @@
     if (podeFalar && falar) {
       try {
         const { identificador } = await getIdentificador({ id: 'candidato', label: base, baseUrl: base, token: tok });
-        if (identificador) await registrarPeerDoisLados(apiTarget, { id: identificador, base_url: base, token: tok });
-      } catch {
-        // a lista dirá "só uma das pontas responde"; o que a pessoa pediu — acompanhar — segue.
+        if (!identificador) throw new Error(m.maquinas_add_erro_sem_identificador());
+        await registrarPeerDoisLados(apiTarget, { id: identificador, base_url: base, token: tok });
+      } catch (e) {
+        // Só recado: o registro ERA o pedido, e falha nele é o resultado — fica à vista.
+        // Com acompanhar, a lista dirá "só uma das pontas responde" e o que a pessoa pediu segue.
+        if (soRecado) { erro = e instanceof Error ? e.message : m.erro_desconhecido(); ocupado = false; return; }
       }
     }
-    addServer(base, tok);
-    window.location.reload();
+    // Sem reload: `addServer` dispara o envio da lista pro hub de sincronização, e recarregar a
+    // página matava esse envio no meio — ao voltar, o hub (sem a máquina nova) mandava e ela
+    // sumia. Quem precisa reagir escuta `onServersChanged`; a tela de máquinas recarrega por
+    // `onAdicionada`.
+    if (!soRecado) addServer(base, tok, undefined, { ativar: false });
     ocupado = false;
+    onAdicionada?.();
+    onFechar();
   }
 
   function lerQr(texto: string) {
@@ -129,6 +146,8 @@
     {fallbackFocus} initialFocus={enderecoEl}
     onClose={fechar}
     actions={[
+      // Cancelar explícito: no celular o card cobre a tela quase inteira e não sobra fundo pra tocar.
+      { label: m.comum_cancelar(), disabled: ocupado, onClick: fechar },
       { label: m.sessao_escanear_qr(), disabled: ocupado, onClick: () => (scanning = true) },
       { label: m.maquinas_add_testar(), kind: 'primary', disabled: !podeTestar, onClick: testarEAdicionar },
     ]}>
@@ -184,7 +203,14 @@
     </label>
     {#if podeFalar}
       <label class="am-falar-linha">
-        <input class="switch am-falar" type="checkbox" bind:checked={falar} disabled={ocupado} />
+        <input class="switch am-acompanhar" type="checkbox" bind:checked={acompanhar} disabled={ocupado} onchange={() => (erro = '')} />
+        <span class="am-falar-txt">
+          <span>{m.maquinas_add_acompanhar()}</span>
+          <span class="am-ajuda">{m.maquinas_add_acompanhar_ajuda()}</span>
+        </span>
+      </label>
+      <label class="am-falar-linha">
+        <input class="switch am-falar" type="checkbox" bind:checked={falar} disabled={ocupado} onchange={() => (erro = '')} />
         <span class="am-falar-txt">
           <span>{m.maquinas_add_falar()}</span>
           <span class="am-ajuda">{m.maquinas_add_falar_ajuda()}</span>

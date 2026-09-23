@@ -32,7 +32,6 @@ function digitar(el: HTMLInputElement, v: string) { el.value = v; el.dispatchEve
 beforeEach(() => {
   vi.clearAllMocks();
   document.body.innerHTML = '';
-  Object.defineProperty(window, 'location', { value: { reload: vi.fn() }, writable: true });
 });
 
 describe('AdicionarMaquina', () => {
@@ -54,9 +53,9 @@ describe('AdicionarMaquina', () => {
     await tick();
     t.botao(m.maquinas_add_testar()).click();
     await tick(); await tick();
-    expect(getConfigForServer).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://192.168.0.10:8765', token: 'abc' }));
-    expect(addServer).toHaveBeenCalledWith('http://192.168.0.10:8765', 'abc');
-    expect(window.location.reload).toHaveBeenCalled();
+    expect(getConfigForServer).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://192.168.0.10:8765', token: 'abc' }), 20000);
+    expect(addServer).toHaveBeenCalledWith('http://192.168.0.10:8765', 'abc', undefined, { ativar: false });
+    expect(t.onFechar).toHaveBeenCalled();
     unmount(t.comp);
   });
 
@@ -141,7 +140,7 @@ describe('AdicionarMaquina', () => {
     botaoTestar.click();
     await tick(); await tick();
     expect(getConfigForServer).toHaveBeenCalledTimes(2);
-    expect(addServer).toHaveBeenCalledWith('http://192.168.0.10:8765', 'abc');
+    expect(addServer).toHaveBeenCalledWith('http://192.168.0.10:8765', 'abc', undefined, { ativar: false });
     unmount(t.comp);
   });
 
@@ -169,7 +168,7 @@ describe('AdicionarMaquina', () => {
     expect(getConfigForServer).toHaveBeenCalledTimes(2);
     expect(getConfigForServer.mock.calls[0][0]).toMatchObject({ baseUrl: 'https://notebook.casa.lan' });
     expect(getConfigForServer.mock.calls[1][0]).toMatchObject({ baseUrl: 'http://notebook.casa.lan:8765' });
-    expect(addServer).toHaveBeenCalledWith('http://notebook.casa.lan:8765', 'abc');
+    expect(addServer).toHaveBeenCalledWith('http://notebook.casa.lan:8765', 'abc', undefined, { ativar: false });
     unmount(t.comp);
   });
 
@@ -210,7 +209,7 @@ describe('AdicionarMaquina — servidores se falam', () => {
     await tick(); await tick(); await tick(); await tick();
     expect(getIdentificador).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://192.168.0.10:8765', token: 'abc' }));
     expect(registrarPeerDoisLados).toHaveBeenCalledWith(ALVO, { id: 'notebook', base_url: 'http://192.168.0.10:8765', token: 'abc' });
-    expect(addServer).toHaveBeenCalledWith('http://192.168.0.10:8765', 'abc');
+    expect(addServer).toHaveBeenCalledWith('http://192.168.0.10:8765', 'abc', undefined, { ativar: false });
     unmount(t.comp);
   });
 
@@ -253,6 +252,55 @@ describe('AdicionarMaquina — servidores se falam', () => {
     t.botao(m.maquinas_add_testar()).click();
     await tick(); await tick(); await tick(); await tick();
     expect(addServer).toHaveBeenCalled();
+    unmount(t.comp);
+  });
+
+  it('só recado: registra o peer, não grava no navegador e fecha', async () => {
+    getConfigForServer.mockResolvedValue({ campos: {}, somente_leitura: {} });
+    getIdentificador.mockResolvedValue({ identificador: 'notebook' });
+    registrarPeerDoisLados.mockResolvedValue({ ok: true, id: 'notebook', base_url: 'http://192.168.0.10:8765', lados: [], meu_endereco: '' });
+    const t = montar({ apiTarget: ALVO, podeFalar: true });
+    digitar(t.campo(m.maquinas_add_endereco()), '192.168.0.10');
+    digitar(t.campo(m.sessao_token()), 'abc');
+    await tick();
+    document.body.querySelector<HTMLInputElement>('input.am-acompanhar')!.click();
+    document.body.querySelector<HTMLInputElement>('input.am-falar')!.click();
+    t.botao(m.maquinas_add_testar()).click();
+    await tick(); await tick(); await tick(); await tick();
+    expect(registrarPeerDoisLados).toHaveBeenCalled();
+    expect(addServer).not.toHaveBeenCalled();
+    expect(t.onFechar).toHaveBeenCalled();
+    unmount(t.comp);
+  });
+
+  it('só recado: falha no registro aparece como erro em vez de fechar', async () => {
+    getConfigForServer.mockResolvedValue({ campos: {}, somente_leitura: {} });
+    getIdentificador.mockResolvedValue({ identificador: 'notebook' });
+    registrarPeerDoisLados.mockRejectedValue(new Error('500: x'));
+    const t = montar({ apiTarget: ALVO, podeFalar: true });
+    digitar(t.campo(m.maquinas_add_endereco()), '192.168.0.10');
+    digitar(t.campo(m.sessao_token()), 'abc');
+    await tick();
+    document.body.querySelector<HTMLInputElement>('input.am-acompanhar')!.click();
+    document.body.querySelector<HTMLInputElement>('input.am-falar')!.click();
+    t.botao(m.maquinas_add_testar()).click();
+    await tick(); await tick(); await tick(); await tick();
+    expect(document.body.querySelector('#am-erro')?.textContent).toContain('500: x');
+    expect(addServer).not.toHaveBeenCalled();
+    expect(t.onFechar).not.toHaveBeenCalled();
+    unmount(t.comp);
+  });
+
+  it('as duas caixas desligadas recusam antes de testar', async () => {
+    const t = montar({ apiTarget: ALVO, podeFalar: true });
+    digitar(t.campo(m.maquinas_add_endereco()), '192.168.0.10');
+    digitar(t.campo(m.sessao_token()), 'abc');
+    await tick();
+    document.body.querySelector<HTMLInputElement>('input.am-acompanhar')!.click();
+    t.botao(m.maquinas_add_testar()).click();
+    await tick();
+    expect(document.body.querySelector('#am-erro')?.textContent).toBe(m.maquinas_add_erro_nenhum());
+    expect(getConfigForServer).not.toHaveBeenCalled();
     unmount(t.comp);
   });
 

@@ -200,6 +200,31 @@ def test_select_nao_convergiu_nao_manda_enter(sem_espera, monkeypatch):
     assert call("cc", "Enter") not in sk.call_args_list
 
 
+def _dialogo_sem_numero(cursor: int) -> str:
+    # Diálogo de confiança do Claude Code: opções sem número, rodapé abaixo, régua só em cima.
+    opcoes = ["No, exit", "Yes, I trust this folder"]
+    return "\n".join(["─" * 40, " Accessing workspace:", ""]
+                     + [f" {'❯' if i == cursor else ' '} {o}" for i, o in enumerate(opcoes, 1)]
+                     + ["", " Enter to confirm · Esc to cancel"])
+
+
+def test_select_dialogo_sem_numero_confere_o_cursor(sem_espera, monkeypatch):
+    # Down engolido no diálogo de confiança: sem conferir, o Enter confirmava "No, exit".
+    telas = iter([_dialogo_sem_numero(1), _dialogo_sem_numero(1), _dialogo_sem_numero(2)])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 2)
+    assert sk.call_args_list == [call("cc", "Down"), call("cc", "Down"), call("cc", "Enter")]
+
+
+def test_select_dialogo_sem_numero_nao_convergiu_nao_manda_enter(sem_espera, monkeypatch):
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: _dialogo_sem_numero(1))
+    with patch.object(terminal_input, "send_keys") as sk:
+        with pytest.raises(terminal_input.DriveError):
+            TerminalInput().select("cc", 2)
+    assert call("cc", "Enter") not in sk.call_args_list
+
+
 def test_select_sem_cursor_legivel_cai_no_caminho_aberto(sem_espera, monkeypatch):
     # Picker do Pi (cursor ascii '>') ou pane ilegivel: sem numero pra ler, volta ao Down*(n-1).
     monkeypatch.setattr(terminal_input, "_capture", lambda _n: "> 1. a\n  2. b\n  3. c")

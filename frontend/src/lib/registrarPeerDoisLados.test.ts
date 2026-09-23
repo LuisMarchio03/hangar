@@ -16,6 +16,7 @@ const store = new Map<string, string>();
 vi.mock('./auth', () => ({
   getBaseUrl: vi.fn(() => 'http://casa:8765'),
   getToken: vi.fn(() => 'tcasa'),
+  listServers: vi.fn(() => []),
 }));
 
 vi.mock('./peers', () => ({
@@ -107,5 +108,18 @@ describe('registrarPeerDoisLados — os dois lados, sucesso e falha nomeada', ()
     expect(peersMock.gravarPeer).toHaveBeenCalledWith(REMOTO_B, DONO_NO_PEER);
     expect(peersMock.checkPeer).toHaveBeenCalledWith(null, 'http://notebook:8765', 'notebook');
     expect(peersMock.checkPeer).toHaveBeenCalledWith(REMOTO_B, 'http://casa:8765', 'srv-casa');
+  });
+
+  it('peer já cadastrado na lista: a volta usa o id da lista, que é o que o esfriamento conhece', async () => {
+    const auth = await import('./auth');
+    vi.mocked(auth.listServers).mockReturnValueOnce([
+      { id: 'srv-nb', label: 'Notebook', baseUrl: 'http://notebook:8765/', token: 'tnot' } as Server,
+    ]);
+    peersMock.gravarPeer.mockImplementation(async () => [NOTEBOOK] as never);
+    peersMock.checkPeer.mockImplementation(async () => ({ estado: 'ok' }) as never);
+    await registrarPeerDoisLados(DONO, NOTEBOOK);
+    const remoto = expect.objectContaining({ id: 'srv-nb', baseUrl: 'http://notebook:8765' });
+    expect(peersMock.gravarPeer).toHaveBeenCalledWith(remoto, DONO_NO_PEER);
+    expect(peersMock.checkPeer).toHaveBeenCalledWith(remoto, 'http://casa:8765', 'srv-casa');
   });
 });

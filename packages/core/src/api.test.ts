@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureDiag, _resetDiagForTests } from './diag';
-import { _limparEsfriamentoParaTestes } from './esfriamento';
+import { estaDesligado, registrarFalha, _limparEsfriamentoParaTestes } from './esfriamento';
 afterEach(_resetDiagForTests);
 import { overwriteGetLocale as overwriteFront } from './paraglide/runtime';
 import { configureLocale } from './i18n';
@@ -13,7 +13,42 @@ import { configureApi } from './apiEnv';
 import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, getHistoryDesde, isAbortError, transcribeFile, transcribeFileForServer, getModelOptions, setEngineModel, rotaGenerica, pairSession } from './api';
 import { mensagemDeErro, formataErro } from './errosApi';
 import { passarBastao, getSyncSetupForServer, setupSyncForServer, disableSyncForServer } from './api';
+import { probeServerResponse } from './api';
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
+
+it('antes do prazo só a verificação explícita consulta o offline; resposta retira a marca', async () => {
+  registrarFalha(server.id);
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}'));
+  await expect(getConfigForServer(server)).rejects.toThrow();
+  expect(fetchMock).not.toHaveBeenCalled();
+  await probeServerResponse(server, '/api/peers/identificador');
+  expect(estaDesligado(server.id)).toBe(false);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+it('consulta normal volta a alcançar o servidor após o prazo persistido', async () => {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+  registrarFalha(server.id);
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}'));
+  await expect(getConfigForServer(server)).rejects.toThrow();
+  clock.mockReturnValue(31000);
+  await getConfigForServer(server);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(estaDesligado(server.id)).toBe(false);
+});
+
+it('timeout apresentado como AbortError pelo navegador marca offline sem confundir cancelamento', async () => {
+  const abort = new DOMException('aborted', 'AbortError');
+  vi.spyOn(globalThis, 'fetch').mockRejectedValue(abort);
+  const cancelled = new AbortController();
+  cancelled.abort();
+  await expect(probeServerResponse(server, '/api/alcance', { signal: cancelled.signal })).rejects.toBe(abort);
+  expect(estaDesligado(server.id)).toBe(false);
+  const timedOut = new AbortController();
+  timedOut.abort(new DOMException('timeout', 'TimeoutError'));
+  await expect(probeServerResponse(server, '/api/alcance', { signal: timedOut.signal })).rejects.toBe(abort);
+  expect(estaDesligado(server.id)).toBe(true);
+});
 it('configura sincronização no servidor escolhido sem trocar nem apagar o servidor ativo', async () => {
   const b = { id: 'b', label: 'B', baseUrl: 'https://b.test', token: 'token-b' };
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}'));

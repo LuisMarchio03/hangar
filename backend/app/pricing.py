@@ -332,7 +332,8 @@ def rate_fast(rate: Rate, model: str) -> Rate:
 def rate_codex(rate: Rate, model: str, long_context: bool) -> Rate:
     """Tarifa Standard por resposta; o total de uma sessão não define contexto longo."""
     if not long_context or rate.origin == "override" or rate.provider != "openai" or canonizar(model) not in {
-        "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+        "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
     }:
         return rate
     return replace(rate, input=rate.input * 2, output=rate.output * 1.5,

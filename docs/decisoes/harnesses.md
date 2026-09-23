@@ -5,6 +5,14 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **Lista e chat do Codex usam o mesmo estado nativo quando a conexão está saudável e assinada.**
+  O hook é alternativa para estado indisponível; um `working` antigo não vence a interrupção
+  confirmada pelo app-server. O retrato só vale para a mesma thread do rollout.
+
+- **Codex: `/compact` chama `thread/compact/start`, fora da fila de prompts.** A troca entre
+  terminal e sem terminal preserva a thread e suas escolhas; só confirma quando o destino
+  carregou a conversa. Assinar eventos com `thread/resume` não sobrescreve sandbox nem aprovação.
+
 - **`omp` é um FORK do Pi** — mesmo JSONL, mesmas extensões, e as diferenças pequenas já custaram
   bugs calados (binário próprio, raiz `~/.omp/agent`, sem `--session-id`, outros nomes de evento,
   subagente no mesmo processo). Raiz do agente omp tem UMA resposta: `app/omp_dirs.agent_dir()`.
@@ -145,6 +153,67 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `|| exit 0`. O aviso não pode conter token terminado em `.py` — é por ele que o instalador
   reconhece a própria entrada. **Prompt barrado por hook (de qualquer origem) vira bolha "não
   chegou" com o erro do hook**, seja recado ou fala da pessoa.
+- **Erro ao LER de um cano encerra o loop de leitura; só erro de MENSAGEM segue adiante.** Um
+  `StreamReader` guarda a exceção de transporte e a relevanta em toda leitura seguinte sem nunca
+  suspender: `continue` ali vira laço quente que não cede o event loop nem aceita cancel, e cada
+  relevantada empilha frames no MESMO traceback, então o `logger.exception` custa quadrático.
+  Leitura e processamento vão em `try` separados.
+- **Progresso de MCP no Claude sem terminal vem de arquivo, não do stream.** O MCP grava cada
+  etapa em `~/.hangar/tool-progress/<tool_use_id>.jsonl` (`{"t", "message"}` por linha; o id chega
+  no `_meta` da chamada como `claudecode/toolUseId`) e o cartão aberto lê por
+  `GET /api/sessions/{name}/tool-progress/{id}` a cada 2 s enquanto roda. A saída parcial do Bash
+  vem do `tasks/<id>.output` do Claude Code, achado pelo processo (`procinfo.saida_de_comando`). Ver
+  [Progresso de MCP](#progresso-de-mcp-no-claude-sem-terminal).
+
+## Codex: compactação e ida ao terminal
+
+Na interrupção de 22/09/2026, o rollout registrou `turn_aborted`, mas o hook ficou em `working`:
+o chat mostrou pronto e o card continuou em execução. A lista passou a consultar o mesmo retrato
+do adapter usado pelo chat. Na prova com uma sessão descartável com terminal, `/interrupt`
+encerrou o turno e `/api/sessions` retornou `idle` mesmo com o marcador ainda em `working`.
+
+Em 22/09/2026, com codex-cli 0.155.1 no Linux, `/compact` enviado pelo composer produziu um
+registro `compacted` no rollout e exibiu “Compactando…” até concluir. Na troca pelo botão,
+a TUI retomou o mesmo UUID; `thread/resume` confirmou `on-request` e sandbox `readOnly`, e o
+Codex lembrou o marcador enviado antes da troca. A tela passou a mostrar “Terminal” sem recarga.
+
+A assinatura de eventos não pode impor Full Access: isso desfazia a permissão preservada pelo
+lançador. Monitor de estado e prévia também precisam sobreviver à troca do cliente. Falha ao
+abrir o pane restaura o sidecar e o processo sem terminal; thread sem rollout é recusada antes
+de encerrar o processo original. A volta para sem terminal lê a política vigente na thread, cancela
+o observador do pane antes de fechá-lo e confirma a saída dos processos antes de iniciar o cano.
+Se o cano falhar, o terminal é restaurado; processo que não encerra impede a abertura de outro.
+
+## Erro de leitura tratado como erro de linha trava o backend inteiro
+
+Fechar uma sessão Codex sem terminal derrubava o backend, e "derrubava" é literal: processo vivo,
+porta 8765 aceitando conexão, nenhuma resposta saindo. Aconteceu 7 vezes entre 14 e 21/09/2026
+(`hangar-vigia.log`).
+
+No Windows o cano fechado não chega como EOF — chega como `ConnectionResetError` (WinError 64).
+O `_read_loop` do `adapters/codex/appserver.py` tratava qualquer `Exception` como erro daquela
+linha: logava e `continue`. Mas `readline()` não lê a próxima linha — o `StreamReader` guardou a
+exceção (`streams.py`: `raise self._exception`) e relevanta a MESMA, sem passar por ponto de
+suspensão. Três consequências, todas medidas:
+
+1. O loop nunca cede o event loop → o backend inteiro para de responder.
+2. `task.cancel()` do `close()` nunca chega a agir — não há ponto de suspensão onde o cancel pegue.
+3. `raise` do mesmo objeto APENSA frames ao traceback dele. Medido: +3 frames por volta. Aos
+   ~12.500 frames, cada `logger.exception` reformatava tudo, com `ast.parse` por frame
+   (`_should_show_carets`) — custo quadrático, 1,6 MB/s de log, 230 MB em minutos, e as 4
+   rotações de `backend.log` consumidas no mesmo segundo levaram junto o histórico útil.
+
+O "não sobe de novo" é consequência: uvicorn atende sinal pelo event loop, que está travado, então
+o processo não morre e segura a porta — e `Restart-HangarTask` recusa subir instância nova com a
+porta ocupada (`scripts/windows-tasks.ps1`), enquanto a vigia só age com o processo há mais de
+10 minutos no ar.
+
+Antes e depois no mesmo `backend.log`, mesmo WinError 64: 11:53 (antigo) 3 entradas de ~12.500
+linhas cada; 11:54 (novo) uma linha INFO e o loop encerrado, backend respondendo em 8 ms.
+
+Regressão coberta por `test_transport_error_on_read_ends_loop_instead_of_spinning`, que conta
+registros de log e aborta no teto — sem isso a volta do bug travaria a suíte em vez de falhar,
+já que nenhum timeout async chega a rodar num loop que não suspende.
 
 ## Troca de provider durante o SSE
 
@@ -1691,3 +1760,34 @@ nenhum. Achar a causa dependeu de outra sessão ler o `settings.json` da conta.
 
 **O que o aviso NÃO pega.** Falha engolida dentro do script (`state_hook.py` e `nav_hook.py`
 embrulham tudo em `except` e saem com 0). O aviso cobre script sumido, Python sumido e crash.
+
+## Progresso de MCP no Claude sem terminal
+
+Em 23/09/2026 o usuário notou que, sem terminal, uma chamada longa de MCP (o `objetivo` do
+`hangar-computer-control`, 7 min) só mostrava "Executando…". A suspeita era o adapter perder o
+progresso; não perde. Prova com um MCP descartável que chama `report_progress` três vezes, rodado
+no `claude -p` 2.1.280 com as mesmas opções do adapter (`stream-json` nos dois sentidos,
+`--verbose`, `--include-partial-messages`): o Claude pede o progresso (`progress_token` e
+`claudecode/toolUseId` no `_meta`), o MCP manda, e o stdout traz zero `tool_progress`. No binário,
+o conversor para o stream repassa `bash_progress`, `tool_heartbeat` (só segundos decorridos),
+`repl_tool_call` e `agent_api_retry`; `mcp_progress` fica só na TUI. Também não entra no `.jsonl`
+da conversa. O `bash_progress` também não sai no stream: o conversor só o repassa com
+`CLAUDE_CODE_REMOTE` ou `CLAUDE_CODE_CONTAINER_ID` no ambiente.
+
+A saída parcial do Bash existe em disco: o Claude Code redireciona o comando para
+`<tmp>/claude-<uid>/<pasta>/<sessão>/tasks/<id>.output` (no Windows,
+`%TEMP%\claude\<pasta>\<sessão>\tasks\<id>.output`) e apaga o arquivo no fim. O nome não traz o id
+da chamada, então `procinfo.saida_de_comando` liga pelo processo: a saída dele aponta para o
+arquivo e a linha de comando traz o comando no `eval '…' < /dev/null` (o `_comando_pedido` de
+sempre). Comando igual ao do cartão = arquivo certo. Vale com e sem terminal. No Linux lê
+`/proc/<pid>/fd/1`; fora dele, `psutil.open_files()` só no processo que casou pela linha de
+comando — medido na VM Windows (Git Bash): 7–57 ms por leitura, saída ao vivo linha a linha.
+Na DELPHI-02 o `%TEMP%` é curto (`ADMINI~1`) e o Claude põe o sufixo do comando entre aspas
+(`pwd -P >| '/c/Users/ADMINI~1/…'`); o `_comando_pedido` cortava na última aspa da linha e
+levava o sufixo junto, então nada casava. Agora ele lê o `eval '…'` como string de shell (aspa
+fecha; `'"'"'` e `'\''` são aspa escapada). Medido lá depois da troca: 10 leituras ao vivo, ~40 ms.
+
+Por isso o canal é um arquivo por chamada, gravado pelo próprio MCP, com o `toolUseId` validado
+por regex dos dois lados (é nome de arquivo). O `hangar-computer-control` foi o primeiro a gravar;
+qualquer MCP nosso pode seguir o mesmo formato. Os arquivos não são apagados: são poucos bytes por
+chamada. Se a pasta crescer a ponto de pesar, a faxina é apagar os mais velhos que alguns dias.

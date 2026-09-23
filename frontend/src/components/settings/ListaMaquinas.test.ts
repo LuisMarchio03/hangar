@@ -8,7 +8,10 @@ import type { LinhaMaquina } from '../../lib/maquinas';
 
 const B: LinhaMaquina = { chave: 'srv:srv-b', nome: 'Notebook', identificador: 'notebook', navegador: { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' }, peer: { id: 'notebook', base_url: 'https://nb.ts.net', token: '••' }, estaMaquina: false };
 const C: LinhaMaquina = { chave: 'peer:vps', nome: 'vps', identificador: 'vps', navegador: null, peer: { id: 'vps', base_url: 'https://vps', token: '••' }, estaMaquina: false };
-const D: LinhaMaquina = { chave: 'srv:srv-d', nome: 'Fora', identificador: null, navegador: { id: 'srv-d', label: 'Fora', baseUrl: 'http://d', token: 'td' }, peer: null, estaMaquina: false };
+const D: LinhaMaquina = { chave: 'srv:srv-d', nome: 'Fora', identificador: null, motivoId: 'vazio', navegador: { id: 'srv-d', label: 'Fora', baseUrl: 'http://d', token: 'td' }, peer: null, estaMaquina: false };
+// A mesma ausência de identificador por motivos diferentes: máquina muda, cada uma com a sua chave.
+const MUDA: LinhaMaquina = { ...D, chave: 'srv:srv-m', nome: 'Muda', motivoId: 'sem_resposta', navegador: { id: 'srv-m', label: 'Muda', baseUrl: 'http://mu', token: 'tm' } };
+const RECUSA: LinhaMaquina = { ...D, chave: 'srv:srv-r', nome: 'Recusa', motivoId: 'token', navegador: { id: 'srv-r', label: 'Recusa', baseUrl: 'http://re', token: 'tr' } };
 const E: LinhaMaquina = { chave: 'srv:srv-e', nome: 'Mac', identificador: 'mac', navegador: { id: 'srv-e', label: 'Mac', baseUrl: 'http://e', token: 'te' }, peer: { id: 'mac', base_url: 'https://mac.ts.net', token: '••' }, estaMaquina: false };
 
 let aberto: { comp: object } | null = null;
@@ -17,8 +20,8 @@ afterEach(() => { if (aberto) unmount(aberto.comp); aberto = null; });
 function montar(linhas: LinhaMaquina[], over: Record<string, unknown> = {}) {
   const el = document.createElement('div');
   document.body.appendChild(el);
-  const cbs = { onAcompanhar: vi.fn(), onFalar: vi.fn(), onEditar: vi.fn(), onCorrige: vi.fn(), onTestarDeNovo: vi.fn(), onRemover: vi.fn() };
-  const comp = mount(ListaMaquinas, { target: el, props: { linhas, estados: {}, meuIdentificador: 'casa', carregando: false, corrige: null, ...cbs, ...over } });
+  const cbs = { onAcompanhar: vi.fn(), onFalar: vi.fn(), onEditar: vi.fn(), onCorrige: vi.fn(), onTestarDeNovo: vi.fn(), onRemover: vi.fn(), onSalvarIdentificador: vi.fn() };
+  const comp = mount(ListaMaquinas, { target: el, props: { linhas, estados: {}, meuIdentificador: 'casa', carregando: false, corrige: null, idSalvando: '', idErro: {}, ...cbs, ...over } });
   aberto = { comp };
   const linhaCurta = (chave: string) => el.querySelector<HTMLElement>(`.sv-linha[data-chave="${chave}"]`)!;
   // O detalhe vive num portal no <body>: abre pela linha curta e se busca no document.
@@ -36,7 +39,17 @@ describe('ListaMaquinas — linha curta', () => {
     expect(t.el.querySelectorAll('.sv-linha').length).toBe(3);
     expect(t.el.querySelector('.mq-acompanhar, .mq-falar, .mq-remover')).toBeNull();
     expect(t.linhaCurta('peer:vps').textContent).toContain(m.servidores_curto_falta_token());
-    expect(t.linhaCurta('srv:srv-d').textContent).toContain(m.servidores_curto_nao_responde());
+    expect(t.linhaCurta('srv:srv-d').textContent).toContain(m.servidores_curto_sem_id());
+  });
+
+  it('faltar o identificador não é uma frase só: quem não respondeu diz isso, quem recusou o token diz aquilo', () => {
+    const t = montar([D, MUDA, RECUSA]);
+    expect(t.linhaCurta('srv:srv-d').textContent).toContain(m.servidores_curto_sem_id());
+    expect(t.linhaCurta('srv:srv-m').textContent).toContain(m.servidores_curto_nao_responde());
+    expect(t.linhaCurta('srv:srv-r').textContent).toContain(m.servidores_curto_token_recusado());
+    // a máquina que não responde é falha, não espera — o farol neutro dizia "nada a relatar"
+    expect(t.linhaCurta('srv:srv-m').querySelector('.mq-farol')!.classList.contains('nao')).toBe(true);
+    expect(t.linhaCurta('srv:srv-d').querySelector('.mq-farol')!.classList.contains('neutro')).toBe(true);
   });
 
   it('a frase curta acompanha o estado medido', () => {
@@ -69,7 +82,8 @@ describe('ListaMaquinas — linha curta', () => {
     const el = document.createElement('div');
     document.body.appendChild(el);
     const props = criarProps({ linhas: [B, C], estados: {}, meuIdentificador: 'casa', carregando: false, corrige: null,
-      onAcompanhar: vi.fn(), onFalar: vi.fn(), onEditar: vi.fn(), onCorrige: vi.fn(), onTestarDeNovo: vi.fn(), onRemover: vi.fn() });
+      idSalvando: '', idErro: {},
+      onAcompanhar: vi.fn(), onFalar: vi.fn(), onEditar: vi.fn(), onCorrige: vi.fn(), onTestarDeNovo: vi.fn(), onRemover: vi.fn(), onSalvarIdentificador: vi.fn() });
     const comp = mount(ListaMaquinas, { target: el, props });
     aberto = { comp };
     el.querySelector<HTMLElement>('.sv-linha[data-chave="peer:vps"]')!.click();
@@ -98,6 +112,51 @@ describe('ListaMaquinas — detalhe do servidor', () => {
     const d = t.detalhe('srv:srv-d');
     expect(d.querySelector<HTMLInputElement>('.mq-falar')!.disabled).toBe(true);
     expect(d.textContent).toContain(m.maquinas_sem_identificador());
+  });
+
+  it('o detalhe separa "não respondeu" de "respondeu sem nome", e o token recusado traz o atalho', () => {
+    const t = montar([MUDA, RECUSA]);
+    const muda = t.detalhe('srv:srv-m');
+    expect(muda.textContent).toContain(m.maquinas_nao_responde());
+    expect(muda.textContent).not.toContain(m.maquinas_sem_identificador());
+    const recusa = t.detalhe('srv:srv-r');
+    expect(recusa.textContent).toContain(m.maquinas_token_aparelho_recusado());
+    [...recusa.querySelectorAll<HTMLButtonElement>('.sd-acao')].find((x) => x.textContent?.trim() === m.servidores_trocar_token())!.click();
+    expect(t.cbs.onEditar).toHaveBeenCalledWith(RECUSA);
+  });
+
+  it('endereço que atende como outra máquina diz QUEM atendeu, em vez de "só de ida"', () => {
+    const t = montar([B], { estados: {
+      notebook: { ok: false, lados: [
+        { lado: 'ida', estado: 'ok' },
+        { lado: 'volta', estado: 'estranho', motivo: 'identidade', identificador: 'outra', url: 'http://127.0.0.1:8765' },
+      ] },
+    } });
+    expect(t.linhaCurta('srv:srv-b').textContent).toContain(m.servidores_curto_endereco_outra());
+    expect(t.linhaCurta('srv:srv-b').textContent).not.toContain(m.servidores_curto_so_ida());
+    const b = t.detalhe('srv:srv-b');
+    expect(b.textContent).toContain('outra');
+    expect(b.textContent).toContain('http://127.0.0.1:8765');
+  });
+
+  it('o identificador do outro servidor é editável daqui, e só com token dele neste aparelho', () => {
+    const t = montar([D, C]);
+    // peer sem entrada no navegador: sem credencial não há como gravar lá
+    expect(t.detalhe('peer:vps').querySelector('.sd-id')).toBeNull();
+    const d = t.detalhe('srv:srv-d');
+    const campo = d.querySelector<HTMLInputElement>('.sd-id')!;
+    expect(campo.value).toBe('');
+    campo.value = 'fora'; campo.dispatchEvent(new Event('input', { bubbles: true }));
+    campo.dispatchEvent(new Event('blur', { bubbles: true }));
+    expect(t.cbs.onSalvarIdentificador).toHaveBeenCalledWith(D, 'fora');
+  });
+
+  it('sem mexer no campo, sair dele não regrava; o erro da gravação aparece na linha', () => {
+    const t = montar([B], { idErro: { 'srv-b': 'deu ruim' } });
+    const b = t.detalhe('srv:srv-b');
+    b.querySelector<HTMLInputElement>('.sd-id')!.dispatchEvent(new Event('blur', { bubbles: true }));
+    expect(t.cbs.onSalvarIdentificador).not.toHaveBeenCalled();
+    expect(b.textContent).toContain('deu ruim');
   });
 
   it('sem identificador próprio, nenhum servidor pode "falar"', () => {

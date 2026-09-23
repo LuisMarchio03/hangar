@@ -140,6 +140,33 @@ def test_prompt_vai_pro_stdin_e_turno_fecha_no_result(adapter):
     assert msg["type"] == "user" and msg["message"]["content"] == [{"type": "text", "text": "oi"}]
 
 
+def test_compactacao_aparece_no_rotulo_e_some_no_fim(adapter):
+    # A CLI avisa a compactação por `status: "compacting"` (repetido a cada 30s) e encerra com
+    # `status: null` ou o `compact_boundary`; troca de modo de permissão também vem como
+    # `status: null` e não pode apagar o rótulo no meio da compactação.
+    async def fluxo():
+        assert await adapter.send_prompt("s1", "/compact") == "sent"
+        sess = adapter._sessions["s1"]
+        await adapter._on_event(sess, {"type": "system", "subtype": "status", "status": "compacting"})
+        assert adapter._evento(sess).label.startswith("Compactando… (")
+        await adapter._on_event(sess, {"type": "system", "subtype": "status", "status": None,
+                                       "permissionMode": "bypassPermissions"})
+        assert sess.label == "Compactando…"
+        # "Pensando…" no meio (a chamada do resumo também é uma chamada) não troca o rótulo nem
+        # impede o fim de limpá-lo.
+        await adapter._on_event(sess, {"type": "system", "subtype": "status", "status": "requesting"})
+        await adapter._on_event(sess, {"type": "system", "subtype": "thinking_tokens", "tokens": 10})
+        assert sess.label == "Compactando…"
+        await adapter._on_event(sess, {"type": "system", "subtype": "status", "status": None,
+                                       "compact_result": {"trigger": "manual"}})
+        assert sess.label is None and not sess.compactando
+        await adapter._on_event(sess, {"type": "system", "subtype": "status", "status": "compacting"})
+        await adapter._on_event(sess, {"type": "system", "subtype": "compact_boundary",
+                                       "compact_metadata": {"trigger": "auto"}})
+        assert sess.label is None
+    _run(fluxo())
+
+
 def test_rotulo_do_spinner_conta_tempo_tokens_e_pensamento_como_a_tui(adapter, monkeypatch):
     relogio = [1000.0]
     monkeypatch.setattr(A.time, "monotonic", lambda: relogio[0])

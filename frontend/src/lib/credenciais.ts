@@ -32,10 +32,10 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
-async function reqEm<T>(s: Server, path: string, init?: RequestInit): Promise<T> {
+async function reqEm<T>(s: Server, path: string, init?: RequestInit, prazoMs = 8000): Promise<T> {
   const res = await fetch(`${s.baseUrl}${path}`, {
     ...init,
-    signal: comTeto(init?.signal ?? undefined, 8000),
+    signal: comTeto(init?.signal ?? undefined, prazoMs),
     headers: {
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
       Authorization: `Bearer ${s.token}`,
@@ -45,8 +45,8 @@ async function reqEm<T>(s: Server, path: string, init?: RequestInit): Promise<T>
   return res.json();
 }
 
-function em<T>(alvo: Server | null, path: string, init?: RequestInit): Promise<T> {
-  return alvo ? reqEm<T>(alvo, path, init) : req<T>(path, init);
+function em<T>(alvo: Server | null, path: string, init?: RequestInit, prazoMs?: number): Promise<T> {
+  return alvo ? reqEm<T>(alvo, path, init, prazoMs) : req<T>(path, init);
 }
 
 export { codexOpcoes, type CodexOpcoes } from '@hangar/core';
@@ -173,6 +173,82 @@ export function listarHarnesses(alvo: Server | null): Promise<Harness[]> {
 
 export function consertarHarness(alvo: Server | null, conserto: string): Promise<{ feito: string; harnesses: Harness[] }> {
   return em(alvo, `/api/harness/conserto/${encodeURIComponent(conserto)}`, { method: 'POST' });
+}
+
+// MCP hangar-computer-control. As chaves nunca voltam inteiras: só se existem e o final.
+export interface ComputerControlTarget { name: string; path: string; transport: string; host: string }
+
+export interface ComputerControlState {
+  agent_exe: { path: string; exists: boolean; size: number };   // windows-agent.exe desta máquina
+  mode: 'package' | 'local';      // package = instalado pelo botão (uvx + release); local = pasta com o código
+  installed_tag: string;
+  package_exists: boolean;
+  targets: ComputerControlTarget[];
+  ssh_hosts: string[];              // os Host do ~/.ssh/config do servidor
+  local_available: boolean;   // o servidor é Windows: a própria máquina pode ser alvo
+  enabled: boolean;
+  project_dir: string;
+  agent_config: string;
+  agent_configs: string[];
+  llm_url: string;
+  llm_model: string;
+  llm_effort: string;
+  llm_key_set: boolean;
+  llm_key_tail: string;
+  jev_key_set: boolean;
+  jev_key_tail: string;
+  jev_key_from_settings: boolean;
+  cliproxy: { preset_url: string; has_keys: boolean; key_is_cliproxy: boolean; installed: boolean; running: boolean };
+  files: { path: string; enabled: boolean }[];
+  migration_skipped?: string[];   // só no retorno do install: alvos da pasta local que não deu pra ler
+}
+
+export interface ComputerControlRequest {
+  enabled: boolean;
+  mode?: 'package' | 'local';
+  project_dir: string;
+  agent_config: string;
+  llm_url: string;
+  llm_model: string;
+  llm_effort: string;
+  llm_key?: string | null;
+  jev_key?: string | null;
+  use_cliproxy_key?: boolean;
+}
+
+export function getComputerControl(target: Server | null): Promise<ComputerControlState> {
+  return em(target, '/api/computer-control');
+}
+
+export function saveComputerControl(target: Server | null, request: ComputerControlRequest): Promise<ComputerControlState> {
+  return em(target, '/api/computer-control', { method: 'PUT', body: JSON.stringify(request) });
+}
+
+// Baixa a release: pode levar mais que o teto padrão de 8 s de uma chamada a outro servidor.
+export function installComputerControl(target: Server | null): Promise<ComputerControlState> {
+  return em(target, '/api/computer-control/install', { method: 'POST' }, 180000);
+}
+
+export function testComputerControlHost(target: Server | null, request: { host: string; proxy_command?: string }):
+  Promise<{ ok: boolean; detail: string }> {
+  return em(target, '/api/computer-control/test-host', { method: 'POST', body: JSON.stringify(request) }, 30000);
+}
+
+export function getComputerControlWindowsSetup(target: Server | null, host: string): Promise<{ prompt: string; user: string }> {
+  return em(target, `/api/computer-control/windows-setup?host=${encodeURIComponent(host)}`);
+}
+
+export function createComputerControlTarget(target: Server | null, request: {
+  project_dir: string; name: string; transport: 'ssh' | 'local'; host?: string; proxy_command?: string;
+  request_timeout?: number | null;
+}): Promise<ComputerControlState> {
+  return em(target, '/api/computer-control/targets', { method: 'POST', body: JSON.stringify(request) });
+}
+
+export function listComputerControlModels(target: Server | null, request: {
+  llm_url: string; llm_key?: string | null; use_saved_key?: boolean; use_cliproxy_key?: boolean;
+}): Promise<{ models: string[] }> {
+  return em(target, '/api/computer-control/models', { method: 'POST', body: JSON.stringify(request) });
 }
 
 // Código + parâmetros vêm do backend (`codex_msgs.CATALOGO`); o front traduz por `harness_codex_m_<codigo>`.

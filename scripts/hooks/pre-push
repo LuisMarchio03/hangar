@@ -75,7 +75,12 @@ while read -r _localref localsha _remoteref remotesha; do
     adicionado="$(printf '%s\n' "$log_saida" | grep '^+' | grep -v '^+++' || true)"
     [[ -z "$adicionado" ]] && continue
     for entrada in "${PADROES[@]}"; do
-        casadas="$(printf '%s\n' "$adicionado" | grep -Ei "${entrada#*::}" || true)"
+        # 1 = sem achado; 2+ = o grep FALHOU, e varredura quebrada não pode passar como limpa.
+        casadas="$(printf '%s\n' "$adicionado" | grep -Ei -- "${entrada#*::}")"; rc=$?
+        if (( rc >= 2 )); then
+            echo "pre-push: a varredura falhou (grep saiu com $rc) no padrão ${entrada%%::*}" >&2
+            exit 1
+        fi
         if [[ -n "$casadas" ]]; then
             achou=1
             printf '\n  \033[31m%s\033[0m  (em %s)\n' "${entrada%%::*}" "$intervalo"

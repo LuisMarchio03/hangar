@@ -942,7 +942,7 @@ def test_reinicio_que_falha_deixa_rastro_no_estado(repo, monkeypatch):
     monkeypatch.setattr(atualizar, "_atualizar_dist", lambda: None)
     monkeypatch.setattr(atualizar, "_topologia", lambda: "systemd")
     monkeypatch.setattr(atualizar, "_reiniciar",
-                        lambda topo: (_ for _ in ()).throw(RuntimeError("systemctl explodiu")))
+                        lambda topo, porta: (_ for _ in ()).throw(RuntimeError("systemctl explodiu")))
     atualizar.executar_reinicio()
     assert "systemctl explodiu" in atualizar.estado()["reinicio_erro"]
 
@@ -1030,13 +1030,29 @@ def test_reiniciar_agora_limpa_a_falha_anterior(repo, monkeypatch):
     assert atualizar.estado()["reinicio_erro"] is None
 
 
-def test_reiniciar_agora_recusa_fora_do_systemd(repo, monkeypatch):
-    """Windows e instalação na mão: quem derruba e sobe o servidor é o instalador. Recusa nomeando
-    a topologia — e NÃO lança processo nenhum, que é o que um `kill` inventado aqui faria."""
-    monkeypatch.setattr(atualizar, "_topologia", lambda: "windows")
+def test_reiniciar_agora_recusa_instalacao_manual(repo, monkeypatch):
+    """Instalação na mão: não há serviço. Recusa nomeando a topologia — e NÃO lança processo
+    nenhum, que é o que um `kill` inventado aqui faria."""
+    monkeypatch.setattr(atualizar, "_topologia", lambda: "manual")
     monkeypatch.setattr(atualizar.subprocess, "Popen",
                         lambda *a, **kw: (_ for _ in ()).throw(AssertionError("nao devia lancar")))
-    assert atualizar.reiniciar_agora() == {"ok": False, "erro": "topologia", "topologia": "windows"}
+    assert atualizar.reiniciar_agora() == {"ok": False, "erro": "topologia", "topologia": "manual"}
+
+
+def test_reiniciar_agora_no_windows_lanca_sem_janela(repo, monkeypatch):
+    """Windows tem tarefa agendada, e o `_reiniciar` já sabe reiniciá-la: o botão não pode recusar.
+    O motor nasce com os mesmos flags do Atualizar — sem eles um console abre na frente da pessoa."""
+    capturado: dict = {}
+    class P:
+        pid = 3
+    monkeypatch.setattr(atualizar, "_topologia", lambda: "windows")
+    monkeypatch.setattr(atualizar, "_E_WINDOWS", True)
+    monkeypatch.setattr(atualizar.tmux, "_scope_prefix", lambda: [])
+    monkeypatch.setattr(atualizar.subprocess, "Popen",
+                        lambda a, **kw: (capturado.update(kw), P())[1])
+    assert atualizar.reiniciar_agora() == {"ok": True, "pid": 3}
+    assert capturado.get("creationflags") == atualizar._FLAGS_MOTOR_WINDOWS
+    assert "start_new_session" not in capturado
 
 
 def test_lancamento_escolhe_o_modo_do_sistema(repo, monkeypatch):

@@ -17,8 +17,10 @@
     // 'detalhe' = janela do servidor (endereços úteis + Avançado); 'parear' = janela do QR.
     parte?: 'tudo' | 'detalhe' | 'parear';
     avancado?: Snippet;
+    /** Bloco que entra ENTRE os endereços e o Avançado (hoje: o reinício do serviço). */
+    antesAvancado?: Snippet;
   }
-  let { alvo = undefined, parte = 'tudo', avancado }: Props = $props();
+  let { alvo = undefined, parte = 'tudo', avancado, antesAvancado }: Props = $props();
 
   function servidorAlvo(): Server | null {
     const r = parseConfig(location.hash);
@@ -217,15 +219,29 @@
     e.tipo === 'rede_local' || e.tipo === 'tailscale' || (e.tipo === 'publico' && !publicoIgual && e.estado !== 'nao_configurado');
   const principais = $derived(enderecos.filter(principal));
   const extras = $derived(enderecos.filter((e) => !principal(e) && !(e.tipo === 'publico' && publicoIgual)));
+
+  // O veredito sai da MEDIÇÃO, nunca do bind. Escutar em loopback não quer dizer inalcançável:
+  // com `tailscale serve` o proxy atende de fora e bate no 127.0.0.1 — e a tela mediu isso duas
+  // linhas abaixo. Alarme só quando nada respondeu; caso contrário é nota, não defeito.
+  // Com CP_PUBLIC_URL apontando pro nome do Tailscale, as duas linhas são o MESMO endereço: o
+  // veredito tem de dizer "Tailscale", o nome do caminho, e não a variável que o repete.
+  const deFora = $derived(
+    [...enderecos.filter((e) => e.estado === 'ok'
+      && (e.tipo === 'tailscale' || (e.tipo === 'publico' && !publicoIgual)))]
+      .sort((a, b) => (a.tempo_ms ?? 0) - (b.tempo_ms ?? 0))[0] ?? null,
+  );
+  const naLan = $derived(enderecos.find((e) => e.tipo === 'rede_local' && e.estado === 'ok') ?? null);
+  const isolada = $derived(listaMedida && !erro && !deFora && !naLan);
 </script>
 
 {#snippet linha(e: EnderecoAlcance)}
+  {@const porOpcao = e.tipo === 'rede_local' && e.estado === 'falhou' && loopback}
   <li class="ac-linha">
-    <span class="ac-farol {farolPorEstado[e.estado]}" aria-hidden="true">{glifoPorEstado[e.estado]}</span>
+    <span class="ac-farol {porOpcao ? 'testando' : farolPorEstado[e.estado]}" aria-hidden="true">{porOpcao ? '○' : glifoPorEstado[e.estado]}</span>
     <span class="ac-txt">
       <span class="ac-nome">{nomeDoTipo(e.tipo)}</span>
       <span class="ac-url">{e.estado === 'nao_configurado' ? m.acesso_nao_configurado() : e.url}</span>
-      <span class="ac-estado {textoPorEstado[e.estado]}">{fraseDeEstado(e)}</span>
+      <span class="ac-estado {porOpcao ? 'neutro' : textoPorEstado[e.estado]}">{fraseDeEstado(e, loopback ? bind : '')}</span>
       {#if parte === 'detalhe' && e.tipo === 'tailscale' && publicoIgual}
         <span class="ac-estado neutro">{m.acesso_publico_igual()}</span>
       {/if}
@@ -234,6 +250,29 @@
       <button class="ac-copiar" onclick={() => copyText(e.url)}>{m.acesso_copiar()}</button>
     {/if}
   </li>
+{/snippet}
+
+{#snippet veredito()}
+  <div class="ac-veredito" class:ruim={isolada}>
+    <p class="ac-ver-titulo">{m.acesso_veredito_titulo()}</p>
+    {#if isolada}
+      <p class="ac-ver-linha"><span class="ac-farol nao" aria-hidden="true">●</span>
+        <span><b>{m.acesso_veredito_ninguem()}</b> {m.acesso_veredito_ninguem_porque({ endereco: bind })}</span></p>
+      <p class="ac-ver-nota">{m.acesso_veredito_saida({ variavel: 'CP_LAN_BIND_IP', valor: 'auto' })}</p>
+    {:else}
+      <p class="ac-ver-linha"><span class="ac-farol {deFora ? 'ok' : 'neutro'}" aria-hidden="true">{deFora ? '●' : '○'}</span>
+        <span>{#if deFora}<b>{m.acesso_veredito_fora_ok()}</b>
+            {m.acesso_veredito_fora_como({ rede: nomeDoTipo(deFora.tipo), tempo: `${deFora.tempo_ms ?? 0} ms` })}
+          {:else}<b>{m.acesso_veredito_fora_nao()}</b> {m.acesso_veredito_fora_nao_porque()}{/if}</span></p>
+      <p class="ac-ver-linha"><span class="ac-farol {naLan ? 'ok' : 'neutro'}" aria-hidden="true">{naLan ? '●' : '○'}</span>
+        <span>{#if naLan}<b>{m.acesso_veredito_lan_ok()}</b>
+          {:else}<b>{m.acesso_veredito_lan_nao()}</b>
+            {deFora ? m.acesso_veredito_lan_nao_ok({ rede: nomeDoTipo(deFora.tipo) }) : ''}{/if}</span></p>
+      {#if !naLan && loopback}
+        <p class="ac-ver-nota">{m.acesso_veredito_quer_lan({ variavel: 'CP_LAN_BIND_IP', valor: 'auto' })}</p>
+      {/if}
+    {/if}
+  </div>
 {/snippet}
 
 {#snippet blocoPar()}
@@ -314,15 +353,7 @@
     <p class="ac-legenda">{m.acesso_legenda_qr()}</p>
     {@render blocoPar()}
   {:else if parte === 'detalhe'}
-    {#if loopback}
-      <div class="ac-alerta">
-        <span class="ac-farol nao" aria-hidden="true">▲</span>
-        <span class="ac-alerta-txt">
-          <b>{m.acesso_alerta_loopback_1({ endereco: bind })}</b><br>
-          {m.acesso_alerta_loopback_2({ variavel: 'CP_LAN_BIND_IP', valor: 'auto' })}
-        </span>
-      </div>
-    {/if}
+    {#if listaMedida && !erro}{@render veredito()}{/if}
     <p class="ac-secao">{m.acesso_secao_enderecos()}</p>
     <ul class="ac-cartao">
       {#if carregando}
@@ -337,6 +368,9 @@
         {/each}
       {/if}
     </ul>
+    <!-- Antes do Avançado de propósito: o que mora aqui (reiniciar o serviço) é ação, e abrir o
+         Avançado empurrava ela pra fora da tela. -->
+    {@render antesAvancado?.()}
     <details class="ac-avancado">
       <summary>{m.servidores_avancado()}</summary>
       {#if !carregando && !erro && extras.length}
@@ -352,15 +386,7 @@
       {@render avancado?.()}
     </details>
   {:else}
-  {#if loopback}
-    <div class="ac-alerta">
-      <span class="ac-farol nao" aria-hidden="true">▲</span>
-      <span class="ac-alerta-txt">
-        <b>{m.acesso_alerta_loopback_1({ endereco: bind })}</b><br>
-        {m.acesso_alerta_loopback_2({ variavel: 'CP_LAN_BIND_IP', valor: 'auto' })}
-      </span>
-    </div>
-  {/if}
+  {#if listaMedida && !erro}{@render veredito()}{/if}
 
   <p class="ac-secao">{m.acesso_secao_enderecos()}</p>
   <p class="ac-legenda">{m.acesso_legenda_enderecos()}</p>
@@ -636,23 +662,42 @@
     max-width: 40ch;
     line-height: 1.45;
   }
-  .ac-alerta {
+  /* O veredito é a âncora da tela: única superfície com fundo aqui dentro, para o olho cair
+     na conclusão antes da lista de endereços que a sustenta. */
+  .ac-veredito {
+    margin: 0 0 var(--space-3);
+    padding: var(--space-3);
+    background: var(--fill-subtle);
+    border-left: 3px solid var(--success);
+    border-radius: var(--radius-md);
+  }
+  .ac-veredito.ruim { border-left-color: var(--error); }
+  .ac-ver-titulo {
+    margin: 0 0 var(--space-2);
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .ac-ver-linha {
     display: flex;
     gap: var(--space-2);
     align-items: flex-start;
-    margin: 0 0 var(--space-3);
-    padding: var(--space-3);
-    background: var(--surface-card);
-    border: 1px solid var(--border-default);
-    border-left: 3px solid var(--warning);
-    border-radius: var(--radius-md);
-  }
-  .ac-alerta-txt {
-    font-size: var(--text-xs);
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-sm);
     color: var(--text-secondary);
     line-height: 1.45;
   }
-  .ac-alerta-txt b { color: var(--text-primary); font-weight: 600; }
+  .ac-ver-linha:last-child { margin-bottom: 0; }
+  .ac-ver-linha b { color: var(--text-primary); font-weight: 600; }
+  .ac-ver-nota {
+    margin: var(--space-2) 0 0;
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--border-subtle);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    line-height: 1.45;
+  }
 
   /* Alvo de toque no celular: o botao declara min-height:0, que anula a regra global
      `button { min-height: 44px }` do app.css:546 — sem isto ele fica 30px na folha

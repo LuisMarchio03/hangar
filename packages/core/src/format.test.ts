@@ -8,7 +8,7 @@ import {
   summarizeText, summarizeToolInput, summarizeToolResult, toolPhase, toolGroupLabel, toolGroupCounts, toolGroupTitulo, toolVerbo,
   rotuloEstado,
   splitTodoBlock, parseImageMessage, parseCanal, parseRealtimeDelegation, parsePeerMessage, basename,
-  parseFilePaths,
+  parseFilePaths, separarComando, nomeFerramenta,
 } from './format';
 import type { ChatEvent, State } from './types';
 import { overwriteGetLocale } from './paraglide/runtime';
@@ -1048,5 +1048,21 @@ describe('parseFilePaths', () => {
     expect(parseFilePaths('Veja /tmp/foto.jpg: pronto').map((r) => r.path)).toEqual(['/tmp/foto.jpg']);
     expect(parseFilePaths('Veja sub/dir/foto.png.').map((r) => r.path)).toEqual(['sub/dir/foto.png']);
     expect(parseFilePaths('backup /tmp/a.png.bak aqui')).toEqual([]);
+  });
+});
+
+describe('separarComando', () => {
+  it('quebra em ; && || e linha, sem mexer em aspas nem em $( )', () => {
+    expect(separarComando('f=$(ls -t *.log | head -1); echo "a;b" && wc -l "$f" || true')).toEqual([
+      'f=$(ls -t *.log | head -1)', 'echo "a;b"', '&& wc -l "$f"', '|| true']);
+    expect(separarComando("cd x && (a; b) | tee 'c && d'")).toEqual(['cd x', "&& (a; b) | tee 'c && d'"]);
+  });
+});
+
+describe('nomeFerramenta', () => {
+  it('encurta o nome de MCP e deixa o resto como veio', () => {
+    expect(nomeFerramenta('mcp__hangar-computer-control__objetivo')).toBe('computer-control · objetivo');
+    expect(nomeFerramenta('mcp__jev__ask')).toBe('jev · ask');
+    expect(nomeFerramenta('Bash')).toBe('Bash');
   });
 });

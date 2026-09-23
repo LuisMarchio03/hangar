@@ -49,7 +49,6 @@ from app.transcript import ChatEvent, TranscriptTailer
 _log = logging.getLogger("hangar.claude_headless")
 
 # Mesma regra de app.registry.sanitize_cwd (duplicada pelo mesmo motivo do adapters/claude.py).
-_SANITIZE_RE = re.compile(r"[^A-Za-z0-9]")
 
 # Chave interna do adapter no registro de providers. O `provider` da sessão continua "claude"
 # (é Claude para o front, comandos, estatísticas e cotas); só o transporte é outro.
@@ -226,6 +225,7 @@ class _Sessao:
         self.tokens_msg_chars = 0     # caracteres da mensagem em voo, até o real chegar
         self.pensando_desde: float | None = None
         self.pensou_s = 0.0
+        self.compactando = False
         self.ativa_em = time.monotonic()   # último evento da CLI ou prompt nosso (estacionar)
         # Input da tool em voo (partial_json acumulado): o rótulo mostra o alvo antes dela rodar.
         self.tool_nome: str | None = None
@@ -239,6 +239,7 @@ class _Sessao:
         self.tokens_fechados = self.tokens_msg_chars = 0
         self.tokens_msg = self.pensando_desde = None
         self.pensou_s = 0.0
+        self.compactando = False
 
     def fechar_mensagem(self) -> None:
         self.tokens_fechados += self._tokens_da_mensagem()
@@ -303,7 +304,8 @@ class ClaudeHeadlessAdapter:
 
     def transcript_path(self, cwd: str, session_id: str, config_dir: str | None = None) -> str:
         base = (Path(config_dir) / "projects") if config_dir else Path(settings.projects_dir)
-        return str(base / _SANITIZE_RE.sub("-", cwd) / f"{session_id}.jsonl")
+        from app.registry import sanitize_cwd   # local: registry importa os adapters
+        return str(base / sanitize_cwd(cwd) / f"{session_id}.jsonl")
 
     def transcript_path_de(self, meta: dict) -> str:
         return self.transcript_path(meta["cwd"], meta["session_id"], meta.get("config_dir"))
@@ -1322,13 +1324,26 @@ class ClaudeHeadlessAdapter:
             if ev.get("permissionMode"):
                 self._definir_modo(sess, ev["permissionMode"])
                 self._reaplicar_base_do_plano(sess)
-            if ev.get("status") == "requesting" and sess.in_progress:
+            status = ev.get("status")
+            if status == "compacting":
+                # A CLI repete este status a cada 30s enquanto resume; o fim vem como
+                # `status: null` (com compact_result) e como o `compact_boundary` abaixo.
+                # Fase própria, não o texto do rótulo: um "Pensando…" no meio não pode
+                # deixar o fim sem efeito.
+                sess.compactando = True
+                sess.label = "Compactando…"
+            elif status is None and "permissionMode" not in ev and sess.compactando:
+                sess.compactando = False
+                sess.label = None
+            elif status == "requesting" and sess.in_progress and not sess.compactando:
                 sess.label = "Pensando…"
         elif sub == "thinking_tokens":
-            if sess.in_progress:
+            if sess.in_progress and not sess.compactando:
                 sess.label = "Pensando…"
-        elif sub and sub.startswith("compact"):
-            sess.label = "Compactando…"
+        elif sub == "compact_boundary":
+            if sess.compactando:
+                sess.compactando = False
+                sess.label = None
         elif sub == "task_started":
             # Subagente (tool Agent/skill que forka): o rótulo passa a dizer o que ELE faz, que é
             # o que o terminal mostra em vez de "Agent…" parado até o fim.

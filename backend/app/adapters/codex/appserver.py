@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 # estouram 64 KiB -> LimitOverrunError. Dimensionado pra alguns MiB.
 _READ_LIMIT = 8 * 1024 * 1024
 
+# Teto de falhas de leitura SEGUIDAS antes de dar o cano por morto. Erro de leitura recuperavel
+# consome a linha, entao alguns poucos ja cobrem o caso real; o teto e a rede contra o laco quente.
+_MAX_FALHAS_LEITURA = 20
+
 
 class AppServerClient:
     def __init__(self, codex_bin: str = "codex") -> None:
@@ -156,13 +160,11 @@ class AppServerClient:
 
     async def _read_loop(self) -> None:
         try:
+            falhas_seguidas = 0
             while True:
-                # Corpo inteiro do loop protegido: readline() pode levantar LimitOverrunError
-                # (linha > _READ_LIMIT), json.loads erros, e o dispatch pode ver JSON valido
-                # nao-objeto. Nenhum desses pode matar a reader task (senao requests futuras so
-                # destravam por timeout e close() fica com subprocess orfao). CancelledError
-                # (cancel de close()) DEVE continuar propagando -> por isso except Exception, nao
-                # BaseException.
+                # LEITURA e PROCESSAMENTO em try separados, porque só o segundo pode seguir adiante:
+                # transporte que caiu nao se recupera, e insistir nele nao le a proxima linha — re-le
+                # a MESMA falha, sem suspender.
                 try:
                     if self._ws is not None:
                         raw = await self._ws.recv()
@@ -171,8 +173,38 @@ class AppServerClient:
                     else:
                         assert self._reader is not None
                         raw = await self._reader.readline()
-                    if not raw:
-                        break  # EOF - processo encerrou ou stream fechado
+                except asyncio.CancelledError:
+                    raise  # cancel de close() - propaga, nao engole
+                except websockets.ConnectionClosed:
+                    break
+                except OSError as exc:
+                    # Cano fechado no Windows chega como ConnectionResetError (WinError 64), nao como
+                    # EOF. O StreamReader GUARDA a excecao e a relevanta em toda leitura seguinte sem
+                    # jamais suspender: tratar isso como erro de linha e continuar vira laco quente
+                    # que nunca cede o event loop (backend inteiro sem resposta) e nem aceita cancel,
+                    # enquanto cada relevantada empilha frames no MESMO traceback e faz o
+                    # logger.exception custar quadratico. Conexao caida e fim de loop, igual ao EOF.
+                    logger.info("codex app-server: conexao encerrada na leitura (%s)", exc)
+                    break
+                except Exception:
+                    # Recuperavel de verdade: readline() converte linha > _READ_LIMIT em ValueError
+                    # DEPOIS de drenar o buffer, entao a proxima leitura anda. O teto existe porque
+                    # a lista de erros que o StreamReader guarda pra sempre nao e fechada: se a
+                    # proxima leitura nao andar, isto encerra em vez de girar a vazio.
+                    falhas_seguidas += 1
+                    logger.exception("codex app-server: erro lendo linha (%d seguidas)", falhas_seguidas)
+                    if falhas_seguidas >= _MAX_FALHAS_LEITURA:
+                        logger.error("codex app-server: leitura falhou %d vezes seguidas, encerrando",
+                                     falhas_seguidas)
+                        break
+                    continue
+                falhas_seguidas = 0
+                if not raw:
+                    break  # EOF - processo encerrou ou stream fechado
+                # Erro daqui pra baixo e da MENSAGEM, nao do cano: json.loads pode falhar e o dispatch
+                # pode ver JSON valido nao-objeto. Nenhum desses pode matar a reader task (senao
+                # requests futuras so destravam por timeout e close() fica com subprocess orfao).
+                try:
                     raw = raw.strip()
                     if not raw:
                         continue
@@ -218,8 +250,6 @@ class AppServerClient:
                         logger.warning("codex app-server: mensagem sem id e sem method, ignorada: %.200r", raw)
                 except asyncio.CancelledError:
                     raise  # cancel de close() - propaga, nao engole
-                except websockets.ConnectionClosed:
-                    break
                 except Exception:
                     logger.exception("codex app-server: erro processando linha, seguindo")
                     continue

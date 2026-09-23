@@ -12,18 +12,34 @@
     estado: EstadoPeer | undefined;
     meuIdentificador: string;
     corrige: { id: string; url: string } | null;
+    idSalvando: boolean;
+    idErro: string;
     onAcompanhar: (linha: LinhaMaquina, ligar: boolean) => void;
     onFalar: (linha: LinhaMaquina, ligar: boolean) => void;
     onEditar: (linha: LinhaMaquina) => void;
     onCorrige: (url: string | null) => void;
     onTestarDeNovo: (linha: LinhaMaquina) => void;
     onRemover: (linha: LinhaMaquina) => void;
+    onSalvarIdentificador: (linha: LinhaMaquina, valor: string) => void;
     onFechar: () => void;
   }
-  let { linha, estado, meuIdentificador, corrige, onAcompanhar, onFalar, onEditar, onCorrige, onTestarDeNovo, onRemover, onFechar }: Props = $props();
+  let { linha, estado, meuIdentificador, corrige, idSalvando, idErro, onAcompanhar, onFalar, onEditar, onCorrige, onTestarDeNovo, onRemover, onSalvarIdentificador, onFechar }: Props = $props();
 
   const e = $derived(estadoDaLinha(linha, estado));
   const url = $derived(linha.navegador?.baseUrl ?? linha.peer?.base_url ?? '');
+
+  // Rascunho do identificador DESTA máquina (o CP_SERVER_ID dela), editável daqui porque é ele
+  // que libera os recados — e sem este campo a única saída era trocar o servidor da tela inteira
+  // para o aviso virar um campo. `null` = ainda não editado: mostra o que o servidor respondeu,
+  // e acompanha a resposta da gravação sem precisar de efeito.
+  let editado = $state<string | null>(null);
+  const rascunho = $derived(editado ?? linha.identificador ?? '');
+  function salvarId() {
+    if (idSalvando || editado === null) return;
+    const valor = rascunho.trim();
+    if (valor === (linha.identificador ?? '')) return;
+    onSalvarIdentificador(linha, valor);
+  }
 
   function selo(l: LadoState | undefined): string {
     if (!l || l.estado === 'nao_configurado') return '·';
@@ -51,6 +67,15 @@
           <span class="mq-hint">{m.maquinas_peer_desligado()}</span>
         {:else if e.tipo === 'sem_identificador'}
           <span class="mq-hint">{m.maquinas_sem_identificador()}</span>
+        {:else if e.tipo === 'nao_responde'}
+          <span class="mq-hint">{m.maquinas_nao_responde()}</span>
+        {:else if e.tipo === 'token_aparelho_recusado'}
+          <span class="mq-hint">{m.maquinas_token_aparelho_recusado()}</span>
+          {#if linha.navegador}<button type="button" class="sd-acao" onclick={() => onEditar(linha)}>{m.servidores_trocar_token()}</button>{/if}
+        {:else if e.tipo === 'volta_outra_maquina'}
+          <span class="mq-hint">{m.maquinas_volta_outra_maquina({ nome: linha.nome, endereco: e.volta?.url ?? '', outro: e.volta?.identificador ?? '' })}</span>
+        {:else if e.tipo === 'ida_outra_maquina'}
+          <span class="mq-hint">{m.maquinas_ida_outra_maquina({ nome: linha.nome, endereco: linha.peer?.base_url ?? '', outro: e.ida?.identificador ?? '' })}</span>
         {:else if e.tipo === 'testando'}
           <span class="mq-hint">{m.peers_estado_testando()}</span>
         {:else if e.tipo === 'token_recusado'}
@@ -80,7 +105,9 @@
 
     {#if corrige?.id === linha.identificador}
       <div class="corrige">
-        <p>{m.peers_corrige_1({ nome: linha.nome, endereco: linha.peer?.base_url ?? '' })}</p>
+        <!-- O endereço que falhou é o da VOLTA: o que o peer guardou DESTA máquina, e não o
+             endereço do peer. Era o do peer aqui, e a frase acusava o endereço certo. -->
+        <p>{m.peers_corrige_1({ nome: linha.nome, endereco: e.volta?.url ?? corrige.url })}</p>
         <p><b>{m.peers_corrige_pergunta({ nome: linha.nome })}</b></p>
         <input class="corrige-input" value={corrige.url}
                aria-label={m.peers_corrige_pergunta({ nome: linha.nome })}
@@ -111,6 +138,26 @@
 
     <p class="sd-grupo">{m.servidores_grupo_entre()}</p>
     <div class="sd-cartao">
+      <!-- O identificador é do .env DELE, não deste aparelho — por isso o chip `env` e não o de
+           servidor, e por isso só aparece quando há token dele aqui: sem credencial não há como
+           gravar lá. Vem antes do interruptor porque é a condição dele. -->
+      {#if linha.navegador}
+        <label class="sd-campo">
+          <span class="sd-rot">{m.peers_identificador()} <EscopoChip escopo="env" />
+            <small>{linha.identificador
+              ? m.maquinas_identificador_remoto_legenda({ nome: linha.nome })
+              : m.peers_identificador_dica({ exemplos: 'casa, notebook' })}</small>
+          </span>
+          <input class="sd-id" class:vazio={!linha.identificador} value={rascunho}
+                 placeholder={m.peers_identificador_placeholder()}
+                 autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
+                 readonly={idSalvando}
+                 oninput={(ev) => (editado = ev.currentTarget.value)}
+                 onkeydown={(ev) => { if (ev.key === 'Enter') salvarId(); }}
+                 onblur={salvarId} />
+        </label>
+        {#if idErro}<p class="sd-motivo erro" role="alert">{idErro}</p>{/if}
+      {/if}
       <label class="sd-campo">
         <span class="sd-rot">{m.maquinas_falar()} <EscopoChip escopo="servidor" /></span>
         <input type="checkbox" class="switch mq-falar" checked={!!linha.peer}
@@ -135,6 +182,12 @@
   /* Quem rola é o miolo, não o diálogo: o vidro do ModalDialog é um ::before do tamanho da caixa, e
      com o próprio diálogo rolando a parte de baixo do conteúdo ficava sem fundo. */
   :global(.modal-backdrop .modal-dialog.sd-dialogo) { width: min(520px, 94vw); max-height: 90dvh; overflow: hidden; display: flex; flex-direction: column; container-type: inline-size; }
+  /* Tela grande: o diálogo usa a largura que sobra. Aqui a medida é da JANELA mesmo, não de um
+     painel — é um sobreposto em cima de tudo. Abaixo de 900px nada muda, então celular e PWA
+     seguem com os mesmos 520px de sempre. */
+  @media (min-width: 900px) {
+    :global(.modal-backdrop .modal-dialog.sd-dialogo) { width: min(760px, 88vw); }
+  }
   :global(.sd-rolagem) { position: relative; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--space-5); }
   .mq-linha { display: flex; flex-direction: column; }
   .sd-cab { display: flex; align-items: flex-start; gap: var(--space-3); margin-bottom: var(--space-3); }
@@ -164,6 +217,12 @@
   .sd-campo + .sd-campo { border-top: 1px solid var(--border-subtle); }
   .sd-rot { flex: 1; min-width: 0; font-size: var(--text-sm); color: var(--text-primary); }
   .sd-motivo { margin: 0; padding: 0 var(--space-3) var(--space-3); font-size: var(--text-xs); color: var(--warning); }
+  .sd-motivo.erro { color: var(--error); }
+  .sd-rot small { display: block; margin-top: 2px; font-size: var(--text-xs); color: var(--text-muted); line-height: 1.35; }
+  .sd-id { width: 9rem; flex-shrink: 0; height: 36px; padding: 0 var(--space-3); box-sizing: border-box;
+           background: var(--surface-inset); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+           color: var(--text-primary); font-family: var(--font-mono); font-size: var(--text-sm); }
+  .sd-id.vazio { border-color: var(--warning); }
   .mq-editar { min-height: 0; height: 32px; padding: 0 var(--space-3); border-radius: var(--radius-sm); border: 1px solid var(--border-default); color: var(--text-primary); font-size: var(--text-sm); }
   .mq-editar:hover { background: var(--bg-hover); }
 

@@ -30,6 +30,11 @@ function rolarPraCima(lista: HTMLElement) {
     get: () => topo,
     set: (v: number) => { topo = v; },
   });
+  // A roda vem ANTES do scroll porque é assim no navegador: quem solta a lista do fim é o gesto
+  // da pessoa, não a distância (a resposta em streaming abre a folga sozinha e não pode soltar).
+  // Sem este evento o teste simula um scroll que ninguém pediu — e a lista, com razão, continua
+  // acompanhando a cauda.
+  lista.dispatchEvent(new Event('wheel'));
   lista.dispatchEvent(new Event('scroll'));
 }
 

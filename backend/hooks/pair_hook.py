@@ -82,7 +82,10 @@ def main() -> None:
     gid = d.get("gid") or ""
     cross = any("::" in p for p in peers)
     contrato = None if (cross or not gid) else os.path.join(pair_dir, f"grupo-{gid}.md")
-    texto = texto_grupo(nome, peers, d.get("task", ""), contrato)
+    # Hook de SessionStart só existe no Claude Code: o próprio harness é fixo, o dos outros vem do sidecar.
+    h = d.get("harness")
+    harness = h if isinstance(h, dict) else {}
+    texto = texto_grupo(nome, peers, d.get("task", ""), contrato, {**harness, nome: "claude"})
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
                                              "additionalContext": texto}}))
 

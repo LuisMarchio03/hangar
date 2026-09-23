@@ -23,7 +23,7 @@ import * as m from '../paraglide/messages';
   import type { AggSession, Provider } from '@hangar/core';
   import type { RemovalSnapshot } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
-  import { createSessionListModel, pairCodigo, pairResto } from '../lib/sessionListModel.svelte';
+  import { createSessionListModel, groupItems, pairCodigo, pairResto } from '../lib/sessionListModel.svelte';
   import { countAwaiting, fmtWhen, initials, clusterByPair } from '@hangar/core';
   import { updateBadge } from '../lib/badge';
   import { arrastarGrupo, mensagemRecusa, type ChaveSessao } from '../lib/arrastarGrupo.svelte';
@@ -48,11 +48,10 @@ import * as m from '../paraglide/messages';
   // servidor, refcount compartilhado com Sidebar/Board. As listas vêm do store como $derived.
   const sessions = $derived(sessionsStore.rows);
   const loading = $derived(sessionsStore.loading);
-  // Semântica ATUAL preservada: o recompute só empurrava serverErrors quando o servidor NÃO tinha
-  // lista (só erro). Com lista stale o banner NÃO aparece — gate !b.loaded, igual à Sidebar/Board.
+  // Sessões em cache não são prova de conexão: a falha continua visível no resumo.
   const serverErrors = $derived(
     sessionsStore.byServer
-      .filter((b) => b.error && !b.loaded)
+      .filter((b) => b.error)
       .map((b) => ({ label: b.server.label, error: b.error! })),
   );
   let error = $state('');
@@ -200,7 +199,7 @@ import * as m from '../paraglide/messages';
   // o ativo a cada chamada (sem reload). Assim chat/SSE/delete vão pro backend certo.
   // Quantas do grupo esperam resposta: é o que precisa sobreviver com o cluster recolhido.
   function pairAwaiting(gid: string): number {
-    return countAwaiting(model.flatRows.filter((s) => s.pair_gid === gid));
+    return countAwaiting(model.pairMembers(gid));
   }
 
   // ── Arrastar sessão sobre sessão -> pedido de grupo (Task 6, mesmo gesto da Sidebar/Board/Canvas,
@@ -221,7 +220,7 @@ import * as m from '../paraglide/messages';
   // origem — nada a ver com o que a pessoa mirou. Representante = 1º membro (mesma regra do Canvas,
   // `join_group` funde o grupo inteiro no backend, então soltar sobre QUALQUER membro basta).
   function groupRep(gid: string): AggSession | null {
-    return model.flatRows.find((s) => s.pair_gid === gid) ?? null;
+    return model.pairMembers(gid)[0] ?? null;
   }
   // Alvo sob o dedo: hit-test real (document.elementFromPoint), não o pointer capture do handle —
   // capture só mantém o handle recebendo os eventos, a posição na tela é que decide quem está embaixo.
@@ -485,7 +484,7 @@ import * as m from '../paraglide/messages';
     {:else if error}
       <div class="empty-state">
         <p class="error-text">{error}</p>
-        <button class="retry-btn" onclick={() => sessionsStore.reconnect()}>{m.lista_tentar_novamente()}</button>
+        <button class="retry-btn" onclick={() => sessionsStore.buscarAgora()}>{m.lista_tentar_novamente()}</button>
       </div>
     {:else if sessions.length === 0}
       <div class="empty-state">
@@ -513,6 +512,7 @@ import * as m from '../paraglide/messages';
           {#each model.groups as g (g.id)}
             {@const awaiting = countAwaiting(g.sessions)}
             <div class="group">
+              {#if g.label}
               <div class="group-head-row">
                 <button
                   class="group-head"
@@ -536,8 +536,9 @@ import * as m from '../paraglide/messages';
                   title={m.lista_enviar_todas()}
                 >➤</button>
               </div>
+              {/if}
               {#if !model.collapsed.has(g.id)}
-                {#each clusterByPair(g.sessions) as item (item.kind === 'header' ? `ph:${item.gid}` : `${item.session.serverId}:${item.session.name}`)}
+                {#each groupItems(g) as item (item.kind === 'header' ? `ph:${item.gid}` : `${item.session.serverId}:${item.session.name}`)}
                   {#if item.kind === 'header'}
                     {@const rep = groupRep(item.gid)}
                     {@const dropAlvoAtual = !!rep && arrastarGrupo.alvo === dragChave(rep)}
@@ -553,7 +554,7 @@ import * as m from '../paraglide/messages';
                             data-session-key={rep ? dragChave(rep) : undefined}
                             title={dropRecusa !== null ? mensagemRecusa(dropRecusa) : undefined}>
                       <span class="pair-chev" class:collapsed={model.collapsed.has(`pair:${item.gid}`)} aria-hidden="true">▾</span>
-                      <span class="pair-label"><GroupGlyph size={13} />&nbsp;<b class="pair-cod">{pairCodigo(item.label)}</b>{#if pairResto(item.label)}<span class="pair-resto">{pairResto(item.label)}</span>{/if}</span>
+                      <span class="pair-label"><GroupGlyph size={13} /><span class="pair-text"><b class="pair-cod">{pairCodigo(item.label)}</b>{#if pairResto(item.label)}<span class="pair-resto"> {pairResto(item.label)}</span>{/if}</span></span>
                 {#if pairAwaiting(item.gid) > 0}
                   <span class="pair-await" title={`${pairAwaiting(item.gid)} ${m.estado_aguardando()}`}>{pairAwaiting(item.gid)}</span>
                 {/if}
@@ -571,7 +572,8 @@ import * as m from '../paraglide/messages';
                          title={dropRecusa !== null ? mensagemRecusa(dropRecusa) : undefined}>
                       <SessionCard
                         {session}
-                        serverBadge={null}
+                        serverBadge={g.pair ? { label: sessionsStore.byServer.find(b => b.server.id === session.serverId)?.error === 'offline'
+                          ? m.lista_servidor_offline({ label: session.serverLabel }) : session.serverLabel, color: session.serverColor } : null}
                         onClick={() => openSession(session)}
                         onDelete={() => handleDelete(session)}
                         onResume={() => handleResume(session)}
@@ -609,7 +611,7 @@ import * as m from '../paraglide/messages';
                       data-session-key={rep ? dragChave(rep) : undefined}
                       title={dropRecusa !== null ? mensagemRecusa(dropRecusa) : undefined}>
                 <span class="pair-chev" class:collapsed={model.collapsed.has(`pair:${item.gid}`)} aria-hidden="true">▾</span>
-                <span class="pair-label"><GroupGlyph size={13} />&nbsp;<b class="pair-cod">{pairCodigo(item.label)}</b>{#if pairResto(item.label)}<span class="pair-resto">{pairResto(item.label)}</span>{/if}</span>
+                <span class="pair-label"><GroupGlyph size={13} /><span class="pair-text"><b class="pair-cod">{pairCodigo(item.label)}</b>{#if pairResto(item.label)}<span class="pair-resto"> {pairResto(item.label)}</span>{/if}</span></span>
                 {#if pairAwaiting(item.gid) > 0}
                   <span class="pair-await" title={`${pairAwaiting(item.gid)} ${m.estado_aguardando()}`}>{pairAwaiting(item.gid)}</span>
                 {/if}
@@ -877,10 +879,10 @@ import * as m from '../paraglide/messages';
   }
   .pair-chev { flex-shrink: 0; font-size: 10px; transition: transform 160ms var(--ease-out); }
   .pair-chev.collapsed { transform: rotate(-90deg); }
-  .pair-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-  .pair-cod { flex-shrink: 0; font-weight: 600; }
+  .pair-label { flex: 1; display: inline-flex; align-items: flex-start; gap: 6px; min-width: 0; }
+  .pair-text { min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
+  .pair-cod { font-weight: 600; }
   .pair-resto {
-    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-weight: 400; color: var(--text-muted); font-size: var(--text-xs);
   }
   .pair-await {

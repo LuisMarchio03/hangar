@@ -38,6 +38,8 @@
   import IconComandos from './icons/IconComandos.svelte';
   import IconOrquestrar from './icons/IconOrquestrar.svelte';
   import IconFolder from './icons/IconFolder.svelte';
+import { fmtDur } from '../lib/fmt';
+import { cachePrazo } from '../lib/cachePrazo';
   import { prepareImage } from '../lib/imagePrep';
   import ContextRing from './ContextRing.svelte';
   import ClaudeModelPopover from './ClaudeModelPopover.svelte';
@@ -84,6 +86,8 @@
     // Cache de prompt do ultimo turno: { ts, ttl, read }. null = sem dado medido -> sem chip.
     lastCache?: { ts: number; ttl: number; read: number } | null;
     onOpenGit: () => void;
+    // Anel de contexto tocável: abre a folha de uso, onde contexto, cache e estatística têm rótulo.
+    onOpenUsage?: () => void;
     onOpenPreview: () => void;
     // Grupo de trabalho: chip 🤝 na fileira de cima (1 par = nome; N = "grupo (N)"); tap abre o PairSheet.
     pairPeers?: string[] | null;
@@ -120,7 +124,7 @@
   }
   let {
     sessionName, sessionState, status, lastCache = null, onSend, onSteer, onCommand, onInterrupt, onOpenGit,
-    onOpenPreview, pairPeers = null, pairedState = null, onOpenPair, onOpenOrq = undefined,
+    onOpenUsage, onOpenPreview, pairPeers = null, pairedState = null, onOpenPair, onOpenOrq = undefined,
     sendToPair = false, onToggleSendToPair,
     shellsRodando = 0, onOpenActivity,
     inputText = $bindable(''),
@@ -139,17 +143,7 @@
 
   // OU, não `??`: a janela estreita (celular) manda sozinha, e a coluna estreita no desktop soma.
   const compacto = $derived(estreito || !desktop.atual);
-
-  // ── Faixa de estatísticas ──────────────────────────────────────────────────
-  // "52s" / "18m01s" / "1h02m". Sub-10s ganha 1 decimal (TTFT vive nessa faixa).
-  function fmtDur(ms: number): string {
-    const s = ms / 1000;
-    if (s < 10) return `${s.toFixed(1)}s`;   // ponto decimal: precedente do ActivitySheet:195
-    if (s < 60) return `${Math.round(s)}s`;
-    const min = Math.floor(s / 60);
-    if (min < 60) return `${min}m${String(Math.round(s % 60)).padStart(2, '0')}s`;
-    return `${Math.floor(min / 60)}h${String(min % 60).padStart(2, '0')}m`;
-  }
+  const statsNaFolha = $derived(!desktop.atual && !!onOpenUsage && status?.ctxPct != null);
 
   // ── Prazo do cache de prompt ───────────────────────────────────────────────
   // O cache do Claude expira num prazo fixo a partir do ultimo turno (usar renova). Saber se ele
@@ -161,25 +155,10 @@
     const id = setInterval(() => (agora = Date.now()), 20_000);
     return () => clearInterval(id);
   });
-  // `ts` e do servidor e `agora` e do aparelho: com o relogio do celular adiantado/atrasado a conta
-  // desanda. Nao da pra corrigir sem uma referencia de hora do servidor, mas da pra impedir o
-  // absurdo — o que resta nunca pode ser MAIOR que a propria janela.
-  const cacheLeftS = $derived(
-    lastCache
-      ? Math.min(lastCache.ttl, Math.round(lastCache.ts + lastCache.ttl - agora / 1000))
-      : 0,
-  );
-  const cacheAtivo = $derived(!!lastCache && cacheLeftS > 0);
-  // Ultimo quinto do prazo. Fixo em 300s, a janela CURTA (5min) nascia ja em ambar e nunca
-  // mostrava o estado tranquilo.
-  const cacheAcabando = $derived(
-    cacheAtivo && !!lastCache && cacheLeftS <= Math.max(60, lastCache.ttl * 0.2),
-  );
-  const cacheLabel = $derived.by(() => {
-    if (!cacheAtivo) return m.composer_expirou();
-    const min = Math.ceil(cacheLeftS / 60);
-    return min >= 60 ? `${Math.floor(min / 60)}h${String(min % 60).padStart(2, '0')}` : `${min}min`;
-  });
+  const prazoCache = $derived(cachePrazo(lastCache, agora));
+  const cacheAtivo = $derived(prazoCache.ativo);
+  const cacheAcabando = $derived(prazoCache.acabando);
+  const cacheLabel = $derived(prazoCache.label);
 
   const isCodex = $derived(provider === 'codex');
   // OMP é o fork do Pi (mesma TUI, mesmo popover de modelo/esforço) — trata igual aqui.
@@ -347,14 +326,14 @@
   //   o blob nao existe mais e a url e a do upload no servidor (ver restaurarDitado).
   // - `arquivo`: nome do audio em .hangar-uploads. E o que deixa a barra sobreviver a sair da
   //   conversa e voltar: o objectURL morre com a aba, o arquivo do servidor nao.
-  // - `before`: o que havia no campo antes deste ditado, pra toda troca remontar a MESMA
-  //   concatenacao trocando so a parte ditada.
+  // - `before`/`after`: texto dos dois lados da insercao, pra trocar so a parte ditada.
   // - `cache`: estilo -> texto ja obtido. Reclicar num estilo por onde ja passou e instantaneo e de
   //   graca; sem isso, comparar duas versoes custaria uma chamada de LLM por ida e volta.
   type DitadoAtivo = {
     url: string;
     arquivo?: string;
     before: string;
+    after: string;
     raw: string;
     atual: VersaoDitado;
     cache: Partial<Record<VersaoDitado, string>>;
@@ -376,7 +355,8 @@
       return {
         url: uploadUrl(sessionName, d.arquivo),
         arquivo: d.arquivo,
-        before: typeof d.before === 'string' ? d.before : '',
+        before: typeof d.before === 'string' ? d.before + (d.after === undefined && d.before ? ' ' : '') : '',
+        after: typeof d.after === 'string' ? d.after : '',
         raw: d.raw,
         atual: ehVersao(d.atual) ? d.atual : 'cru',
         cache: d.cache ?? {},
@@ -391,8 +371,8 @@
   let ditado = $state<DitadoAtivo | null>(restaurarDitado());
   $effect(() => {
     if (ditado?.arquivo) {
-      const { arquivo, before, raw, atual, cache } = ditado;
-      localStorage.setItem(ditadoKey, JSON.stringify({ arquivo, before, raw, atual, cache }));
+      const { arquivo, before, after, raw, atual, cache } = ditado;
+      localStorage.setItem(ditadoKey, JSON.stringify({ arquivo, before, after, raw, atual, cache }));
     } else {
       localStorage.removeItem(ditadoKey);
     }
@@ -410,7 +390,8 @@
   let destroyed = false;         // onDestroy: um getUserMedia em voo nao pode ligar o mic num componente morto
   // Feedback da gravacao: timer (segundos) + waveform (nivel de voz por barra, deslizante).
   let recSeconds = $state(0);
-  let recBars = $state<number[]>([]);
+  let recBars = $state<{ id: number; level: number }[]>([]);
+  let recBarId = 0;
   let audioCtx: AudioContext | undefined;
   let rafId = 0;
   let recTimer: ReturnType<typeof setInterval> | undefined;
@@ -1134,6 +1115,7 @@
     // palavra e nao ter mais como ouvir o audio nem trocar a versao era exatamente a queixa: o
     // audio existe, o texto cru existe, e mesmo assim so restava ditar tudo de novo.
     autoGrow();
+    rememberSelection();
   }
 
   // Tap em qualquer area do composer que nao seja um controle -> foca o input.
@@ -1233,6 +1215,35 @@
   // dois minutos de fala por causa de um timeout ou de um 502 do provedor e perder trabalho dela.
   // So o File — o Blob vive na memoria da aba e nao paga nada; sai da tela no proximo sucesso.
   let audioFalhou = $state<{ file: File; ditado: boolean; avisoTeto: boolean } | null>(null);
+  // O botão do mic tira o foco; a seleção do textarea pode voltar a zero durante o ditado.
+  let lastSelection: { value: string; start: number; end: number } | null = null;
+
+  function rememberSelection() {
+    const field = textareaEl;
+    if (field) lastSelection = { value: field.value, start: field.selectionStart, end: field.selectionEnd };
+  }
+
+  function rememberFocusedSelection() {
+    if (textareaEl === document.activeElement) rememberSelection();
+  }
+
+  function inserirTranscricao(texto: string): { before: string; after: string; hadDraft: boolean; cursor: number } {
+    const field = textareaEl;
+    const value = field?.value ?? inputText;
+    const saved = lastSelection?.value === value ? lastSelection : null;
+    const focused = field === document.activeElement;
+    const start = Math.min((focused ? field?.selectionStart : saved?.start) ?? value.length, value.length);
+    const end = Math.min((focused ? field?.selectionEnd : saved?.end) ?? start, value.length);
+    const before = value.slice(0, start);
+    const after = value.slice(end);
+    const leading = before && !/\s$/.test(before) ? ' ' : '';
+    const trailing = after && !/^\s/.test(after) ? ' ' : '';
+    const insert = `${leading}${texto}${trailing}`;
+    field?.setRangeText(insert, start, end, 'end');
+    inputText = `${before}${insert}${after}`;
+    return { before: before + leading, after: trailing + after,
+      hadDraft: value.trim().length > 0, cursor: start + insert.length };
+  }
 
   async function transcribeIntoComposer(file: File, opts?: { ditado?: boolean; avisoTeto?: boolean; autoEnvio?: boolean }) {
     // Uma por vez: transcribing e setado SINCRONO antes de qualquer await, entao um segundo audio
@@ -1257,11 +1268,8 @@
         if (opts?.ditado) { somRecusa(); setTimeout(fecharBipes, 400); }
         return;
       }
-      // Le inputText SO agora (pos-await, na hora de atribuir): o campo continua digitavel durante
-      // "transcrevendo…" (canSend so trava o botao de enviar), entao ler antes do await perderia o
-      // que o usuario digitou a mao enquanto esperava o round-trip (mais lento agora, com a limpeza).
-      const before = inputText.trim();
-      inputText = before ? `${before} ${t}` : t;
+      // A selecao e lida depois da rede: o campo continua editavel durante a transcricao.
+      const { before, after, hadDraft, cursor } = inserirTranscricao(t);
       // Barra do ditado: so no mic. Audio ANEXADO pelo 📎 nao passa por limpeza nenhuma (o backend
       // nem recebe `limpar`), entao nao ha versao pra trocar — e o arquivo e da pessoa, ela ja tem
       // como ouvir. `cru` cai pro proprio `t` quando o backend nao mandou raw (limpeza desistiu e
@@ -1271,7 +1279,7 @@
         // `cru` cai pro proprio `t` quando o backend nao mandou raw: aconteceu quando a limpeza
         // desistiu (aviso) ou o texto era curto demais pra limpar, e nos dois casos o que esta no
         // campo JA e o cru — que e o que o botao "Cru" tem que devolver.
-        abrirDitado({ file, path, before, cru: raw?.trim() || t, texto: t, aplicado: estilo_aplicado });
+        abrirDitado({ file, path, before, after, cru: raw?.trim() || t, texto: t, aplicado: estilo_aplicado });
       } else {
         fecharDitado();
       }
@@ -1282,7 +1290,7 @@
         recError = m.composer_silencio();
       }
       if (opts?.ditado && opts.autoEnvio !== false) {
-        if (podeEnviarSozinho({ motivo: motivoDoFim, texto: t, aviso, rascunhoAntes: before.length > 0 })) {
+        if (podeEnviarSozinho({ motivo: motivoDoFim, texto: t, aviso, rascunhoAntes: hadDraft })) {
           iniciarContagem();
         } else {
           // Envio automatico suprimido (motivo != silencio, aviso da limpeza ou rascunho ja no
@@ -1296,6 +1304,8 @@
       await tick();
       autoGrow();
       textareaEl?.focus();
+      textareaEl?.setSelectionRange(cursor, cursor);
+      rememberSelection();
     } catch (err) {
       console.error(m.composer_transcricao_falhou(), err);
       cancelarContagem();   // erro de transcricao nunca inicia contagem
@@ -1333,13 +1343,14 @@
   }
 
   // Abre a barra pro ditado que acabou de cair no campo. Um por vez: o anterior ja saiu do campo.
-  function abrirDitado(d: { file: File; path?: string; before: string; cru: string; texto: string; aplicado?: string }) {
+  function abrirDitado(d: { file: File; path?: string; before: string; after: string; cru: string; texto: string; aplicado?: string }) {
     fecharDitado();
     const atual: VersaoDitado = ehVersao(d.aplicado) ? d.aplicado : 'cru';
     ditado = {
       url: URL.createObjectURL(d.file),
       arquivo: d.path?.split('/').pop(),
       before: d.before,
+      after: d.after,
       raw: d.cru,
       atual,
       // O texto que ja esta no campo entra no cache pela versao que o BACKEND disse ter aplicado —
@@ -1366,8 +1377,13 @@
     if (ditado !== alvo) return;
     alvo.cache[v] = texto;
     alvo.atual = v;
-    inputText = alvo.before ? `${alvo.before} ${texto}` : texto;
-    void tick().then(autoGrow);
+    inputText = `${alvo.before}${texto}${alvo.after}`;
+    void tick().then(() => {
+      autoGrow();
+      const cursor = alvo.before.length + texto.length;
+      textareaEl?.setSelectionRange(cursor, cursor);
+      rememberSelection();
+    });
   }
 
   // Troca a versao do texto ditado. Nao reenvia o audio: a Whisper ja rodou e o cru esta aqui, entao
@@ -1567,7 +1583,7 @@
         if (now - last > 55) {   // ~18fps (nao re-renderiza o array a cada frame de tela)
           last = now;
           // cresce da esquerda ate encher a largura (barCount), depois desliza mantendo os ultimos.
-          recBars = [...recBars, level].slice(-barCount);
+          recBars = [...recBars, { id: ++recBarId, level }].slice(-barCount);
           if (maosLivres && vadEstado && nQuad) {
             const rmsJanela = Math.sqrt(somaQuad / nQuad);   // SEM ganho e SEM clamp
             if (passoVad(vadEstado, rmsJanela, now) === 'encerra') pararPorMotivo('silencio');
@@ -2034,7 +2050,15 @@
           </span>
         {/if}
       {#if status?.ctxPct != null}
-        <ContextRing pct={status.ctxPct} size={22} />
+        {#if onOpenUsage}
+          <button class="ctx-ring-btn" onclick={onOpenUsage} aria-label={m.uso_aria()}>
+            <!-- Widget dentro de botão: o meter seria lido de novo ao navegar por dentro. O valor
+                 está na folha que o botão abre. -->
+            <span class="ctx-ring-mudo" aria-hidden="true"><ContextRing pct={status.ctxPct} size={22} /></span>
+          </button>
+        {:else}
+          <ContextRing pct={status.ctxPct} size={22} />
+        {/if}
       {/if}
     </div>
   </div>
@@ -2120,6 +2144,10 @@
         : m.composer_mensagem_para({ nome: nomePlaceholder })}
       rows={1}
       oninput={handleInput}
+      onpointerup={rememberSelection}
+      onclick={rememberSelection}
+      onkeyup={rememberSelection}
+      onselect={rememberFocusedSelection}
       onkeydown={handleKeydown}
       onpaste={onPaste}
       aria-label={m.composer_aria_mensagem()}
@@ -2145,7 +2173,7 @@
              precisa dizer "Gravando áudio" uma vez, via aria-label). -->
         <span class="rec-time" aria-hidden="true">{recTimeLabel}</span>
         <span class="rec-wave" bind:clientWidth={waveW} aria-hidden="true">
-          {#each recBars as b, i (i)}<span class="rec-bar" style="--h: {b}"></span>{/each}
+          {#each recBars as b (b.id)}<span class="rec-bar" style="--h: {b.level}"></span>{/each}
         </span>
       </div>
     {/if}
@@ -2462,7 +2490,10 @@
   </div>
   </div>
 
-  {#if stats}
+  <!-- No celular a faixa mora na folha de uso, que o anel de contexto abre: embaixo do card ela era
+       a terceira camada de cromo, em 11px. Sem anel (sessão sem ctxPct) não há porta pra folha, e a
+       faixa fica. -->
+  {#if stats && !statsNaFolha}
     <!-- Faixa de estatísticas (app/stats.py). Números de tempo/velocidade são aproximados
          por construção -> "~" no rótulo. transparent: quem carrega o material é o .composer. -->
     <!-- tabindex: a faixa rola de lado sem barra visível; sem foco, teclado não alcança o
@@ -2780,6 +2811,10 @@
     padding-left: var(--space-2);
     flex-shrink: 0;
   }
+  /* Na aba estreita, o nome do repo cede espaco antes de cortar o anel de contexto. */
+  .composer.compacto .status-tab .tab-left { min-width: 32px; flex-shrink: 4; }
+  .composer.compacto .status-tab .tab-right { min-width: 0; flex-shrink: 1; }
+  .composer.compacto .status-tab .tab-right .repo-chip { overflow: hidden; }
 
   /* Card unico que reune status, textarea e controles. */
   .composer-card {
@@ -3091,6 +3126,19 @@
   .cache-chip.acabando { color: var(--warning); }
   .cache-chip.acabando .cache-glyph { background: var(--warning); }
   .cache-chip.frio .cache-glyph { background: var(--text-muted); opacity: 0.5; }
+  /* Alvo maior que o anel sem mudar a altura da faixa: o padding cresce pra fora e a margem
+     negativa devolve o espaço. */
+  .ctx-ring-btn {
+    display: inline-flex;
+    min-width: 0;
+    min-height: 0;
+    padding: 6px 4px;
+    margin: -6px -4px;
+    border-radius: var(--radius-md);
+    flex-shrink: 0;
+  }
+  .ctx-ring-btn:active { background: var(--bg-hover); }
+  .ctx-ring-mudo { display: inline-flex; }
 
   /* Pareada: chip acende no accent (o 🤝 sem par fica na cor muted padrão do repo-chip). */
   .pair-chip--on { color: var(--accent); }

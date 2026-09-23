@@ -111,6 +111,10 @@ async def send(ctx: Context, alvo: str, texto: str, tmux: bool = False) -> dict[
     if alvo == eu or (settings.server_id and alvo == f"{settings.server_id}::{eu}"):
         raise ToolError(f"recusado: '{alvo}' é esta sessão — o recado voltaria pra você. "
                         "Quem é quem: tool `sessoes` (campo `voce`).")
+    # Modelo que escreve "[de: eu] …" por conta própria não ganha o prefixo em dobro — com ou sem o
+    # "<servidor>::" na frente, que é como o envio pra outro servidor qualifica o remetente.
+    servidor = rf"(?:{re.escape(settings.server_id)}::)?" if settings.server_id else ""
+    texto = re.sub(rf"^\s*\[de:\s*{servidor}{re.escape(eu)}\]\s*", "", texto)
     if peers.is_remote(alvo):
         srv, sess = peers.split_addr(alvo)
         if not settings.server_id:
@@ -121,12 +125,8 @@ async def send(ctx: Context, alvo: str, texto: str, tmux: bool = False) -> dict[
         except peers.PeerError as e:
             raise ToolError(str(e)) from e
         return {"alvo": alvo, **(resp or {})}
-    if not tmux:
-        uds = (await api.peer_address(alvo)).get("uds")
-        if uds:
-            raise ToolError(f"recusado: '{alvo}' é sessão Claude desta máquina e o caminho nativo "
-                             "alcança os dois lados. Use SendMessage (o alvo aparece no ListAgents); "
-                             "se não aparecer, repita com tmux=true.")
+    # `tmux` fica aceito por compatibilidade: o backend já escolhe o transporte (socket nativo,
+    # plugin, tmux, fila) e nunca devolve o envio pro modelo fazer por outra ferramenta.
     try:
         resp = await api.input_prompt(alvo, api.InputBody(text=f"[de: {eu}] {texto}", steer=True))
     except HTTPException as e:
@@ -136,7 +136,7 @@ async def send(ctx: Context, alvo: str, texto: str, tmux: bool = False) -> dict[
 
 @mcp.tool(description="Aviso pro grupo de pareamento desta sessão, como `hangar-send --group <msg>`: "
                       "chega como `[grupo: <você>]` nos demais. Marco, não conversa: NUNCA responda um "
-                      "`[grupo: …]` com isto. `pulados` lista quem não recebeu (mande por SendMessage).")
+                      "`[grupo: …]` com isto. O backend escolhe o transporte pra cada membro.")
 async def group(ctx: Context, texto: str, tmux: bool = False) -> dict[str, Any]:
     from app import api
     eu = await _eu(ctx)

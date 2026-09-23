@@ -284,10 +284,24 @@ texto, mas o backend a enviaria para o endpoint padrão do LLM.
     transição de hook e o peer já ocioso nunca receberia. O dict de classe (`_pair_ausencias`) é
     limpo com `pop(n, None)`, nunca `del` — as 4 instâncias varrem concorrentemente e outra thread
     pode já ter tirado a mesma chave.
-  - **`--group` recusa `[grupo:`/`[de:` reencaminhado e limita 5/min por gid** (429) — só no que
-    passa pelo backend: peer com `inbox_socket_of` é devolvido em `pulados` e vai por `SendMessage`
-    (o script sai 3 listando quem falta); o socket do Claude Code está fora do alcance do backend.
-    `--group --tmux` força o antigo.
+  - **`--group` recusa `[grupo:`/`[de:` reencaminhado e limita 5/min por gid** (429). Todo membro
+    recebe pelo backend (escada abaixo); `pulados` fica vazio e é mantido só por compatibilidade.
+  - **Recado de sessão-irmã: o backend escreve no socket nativo do Claude Code; o modelo nunca
+    escolhe transporte.** Escada em `_send_one`/`_send_one_headless`: socket nativo → plugin sem
+    tecla → tmux → fila; `hangar-send` só imprime "entregue"/"na fila"/erro. Até 21/09/2026 o
+    script RECUSAVA (código 3) quando os dois lados tinham socket e mandava o modelo usar
+    `SendMessage`; a `tardis-control` leu a recusa como entrega e um kick-off pra sessão
+    recém-nascida se perdeu. A frase "o socket do Claude Code está fora do alcance do backend"
+    era suposição: medido em 21/09/2026 com um socket falso capturando o `SendMessage`, o quadro é
+    uma linha JSON (`{"msgV":1,"msg_id","type":"user","message":{"role","content":"<cross-session-message
+    from=… from-name=… from-mode=…>…</cross-session-message>"},"priority":"next","from":"uds:…"}`),
+    sem autenticação no Linux (token só no Windows), e um cliente Python entregou numa sessão viva
+    (`app/uds_messaging.py`). O pid/socket vem do registro do próprio CLI
+    (`<config>/sessions/<pid>.json`, campo `messagingSocketPath`), que cobre a sessão sem terminal —
+    `inbox_socket_of` pelo pane devolvia `null` nela. `from` é endereço de RESPOSTA: o backend liga
+    `cc-socks/<pid>.sock` próprio pra receber `peer_message_status` (retido/recusado) e avisa a
+    remetente com `[painel: hangar]`. O recado vai com o prefixo `[de: X]` no corpo e o parser não
+    o dobra (`_PEER_PREFIXO_RE`), pra `[grupo:]` sobreviver ao envelope.
   - Contrato do grupo dissolvido vai pra `~/.hangar/pair-arquivo/`, não pro `unlink`.
   - **Teste que chega em `SessionRegistry.list()` ou num `pair.leave()` de último membro isola
     `pair.settings.projects_dir`, zera `SessionRegistry._pair_ausencias`, anula
@@ -342,6 +356,36 @@ a conta padrão tinha zero e uma conta adicional tinha duas; ambas ainda possuí
 - `nothingToReset` e `noCredit` são resultados sem sucesso. Todo resultado definitivo força nova
   leitura da credencial; falha nessa releitura preserva a informação de que o consumo já ocorreu.
 
+## Registro de peer nunca grava loopback, e o endereço torto tem frase própria
+
+(`frontend/src/lib/registrarPeerDoisLados.ts`, `lib/maquinas.ts`,
+`components/settings/{ListaMaquinas,DetalheServidor,MaquinasSettings}.svelte`, 21/09/2026.)
+Ligar "Recados entre sessões" entre duas máquinas desta malha deixava o par pela metade, e a tela
+só dizia "Recados só de ida". Medido nas duas pontas: a viana guardava
+`casa -> http://127.0.0.1:8765`, e `GET /api/peers/check` NELA devolvia
+`{"estado":"estranho","identificador":"viana"}` — ela batia em si mesma. Com o endereço do
+Tailscale a mesma chamada devolvia `{"estado":"ok","identificador":"casa","tempo_ms":35}`.
+
+A causa é que o registro gravava no peer a URL que o NAVEGADOR usa para o dono (`meuBase =
+dono.baseUrl`). No desktop essa URL é `http://127.0.0.1:8765`, que do outro lado do fio é o
+próprio peer. **O padrão continua sendo a URL do navegador — ela é a única medida de verdade que
+o aparelho tem —, mas loopback nunca: aí quem responde é `/api/alcance` do dono, que já mediu por
+onde chegam nele.** Não é heurística de rede: loopback gravado num peer é errado por construção,
+e falha PARECENDO registrado.
+
+Três frases separadas onde havia uma. `estranho` ganhou tipo próprio (`ida_outra_maquina` /
+`volta_outra_maquina`) antes do `parcial`, que é o balde genérico e engolia o único modo de falha
+que se conserta trocando um endereço em vez de esperar a máquina voltar — e o bloco de correção
+agora abre nele. E "não responde ou não tem identificador" virou três: o 401 é o token deste
+aparelho recusado, a falha de rede é a máquina fora do ar, e o identificador vazio é um campo
+para preencher — que passou a existir no detalhe de QUALQUER servidor com token aqui, gravando o
+`CP_SERVER_ID` no `.env` dele. Antes, o aviso não tinha campo nenhum: era preciso trocar o
+servidor da tela inteira para preencher o nome de outra máquina.
+
+Um terceiro erro apareceu junto: o bloco de correção pergunta "qual endereço o X deve usar para
+chegar aqui?" e gravava a resposta como `base_url` do PRÓPRIO X — consertava o lado oposto ao que
+a frase promete. O endereço digitado é o do dono, e vai no peer.
+
 ## Servidor que não responde esfria; o interruptor manual não bastava
 
 (`packages/core/src/esfriamento.ts`, `api.ts`, `frontend/src/lib/sessionsStore.svelte.ts`,
@@ -359,12 +403,69 @@ espera de 1 min funcionando). A causa é o iOS, que descarrega e recarrega o PWA
 tempo todo: cada retomada zerava o contador em memória e o aparelho recomeçava as três tentativas
 por servidor.
 
-A regra que valeu é a do usuário: **uma falha de REDE já marca o servidor como desligado, e ele só
+A regra adotada naquele momento foi: **uma falha de REDE já marca o servidor como desligado, e ele só
 volta a ser procurado quando a pessoa mandar** — não há retomada por tempo. O estado vai para o
 `localStorage`, senão o recarregamento do app apaga o que já foi aprendido. Erro HTTP não conta: a
 máquina respondeu, e marcá-la esconderia o erro que precisa aparecer. Abrir a lista dos offline na
 barra lateral é o "buscar agora" e libera todos. `enabled: false` no `peers.json` continua
 existindo para a máquina que se quer fora de propósito.
+
+Uma resposta recebida em outra tela também comprova que a máquina voltou. Em 22/09/2026, o
+Delphi-02 respondia à tela Máquinas, mas sua lista continuava na última sessão conhecida: os
+clientes de peers/alcance não retiravam a marca de falha, e o stream encerrado não era reaberto.
+Essas respostas agora liberam e reconectam somente o servidor que respondeu. Falha de rede
+mantém a marca. Expandir o resumo dos offline não libera novas tentativas; Reconectar antecipa
+a tentativa por servidor ou para todos, conforme o botão usado. Marca sem lista carregada aparece no
+resumo offline, em vez de sumir.
+
+Ainda em 22/09/2026, o usuário substituiu o bloqueio permanente por recuperação automática.
+Agora cada falha agenda outra tentativa em 30 s, 1 min, 2 min, 4 min, 5 min, 10 min e,
+daí em diante, 30 min. Uma resposta limpa a contagem; a próxima queda recomeça em 30 s.
+Prazo absoluto e contagem ficam no armazenamento: recarregar não reinicia a espera nem libera
+consultas antecipadas. A marca antiga sem prazo migra uma vez para 30 s. Expirar só permite
+tentar; a marca offline sai quando há resposta. A regra também vale para o servidor ativo.
+Sessões de uma rota offline ficam fora da agregação visual, preservando o cache interno; assim
+uma rota indisponível não esconde uma cópia saudável da mesma sessão pela deduplicação.
+
+Na mesma data, o Ctrl+R reproduziu uma falsa queda: o `EventSource.onerror` gravou a marca 6 ms
+depois do `beforeunload`, antes do `pagehide`. A saída da página agora fecha os streams e cancela
+seus prazos, protegendo também os fetches cancelados pela navegação. Eventos de uma conexão
+substituída não alteram a atual. `pageshow` restaura os streams ao voltar pelo histórico, sem
+apagar marcas de falhas reais.
+
+Em 23/09/2026 o usuário pediu que máquina que já respondeu não passe pela mesma regra. Diário do
+iPhone: o app abriu às 06:19:29 e foi para o segundo plano 1 s depois, antes de as listas
+chegarem; na volta, às 06:19:45, o iOS entregou o erro do socket morto na suspensão 18 ms ANTES do
+`visibilitychange`, e a marca de 30 s gravou. A liberação daquele dia só olhava quem tinha lista
+ao esconder, então não soltou ninguém; fechar e reabrir o app herdava o prazo (restavam 19 s,
+depois 14 s) até conectar em 89 ms às 06:20:23. Agora a última resposta de cada servidor fica
+gravada (`hangar_servidores_responderam`, uma escrita por minuto no máximo). Quem respondeu nas
+últimas 24 h não escala, fica sempre em 30 s, e é liberado na hora quando o app abre com a tela
+à vista ou volta a ficar visível. Recarga em segundo plano continua respeitando o prazo, e a
+máquina sem resposta há mais de 24 h volta à escala inteira.
+
+Na mesma conversa o usuário apontou o resto do defeito: com o app em segundo plano a queda ainda
+contava, marcava offline e cada nova tentativa escondida subia a espera. Falha com o app escondido
+agora não chama `registrarFalha` (o `definirProtegido` cobre também os `fetch`), e a nova tentativa
+escondida sai a cada 30 s fixos, para não martelar máquina desligada com o desktop minimizado.
+O estado de segundo plano vem do evento `visibilitychange`, não do `document.visibilityState`:
+o erro da suspensão chega antes do evento da volta, e só o evento garante que ele ainda cai como
+segundo plano.
+
+Ainda em 23/09/2026 a primeira espera de 30 s virou o problema: com o backend local reiniciando
+(ou uma queda de um instante com a máquina no ar), a lista marcava a máquina em que a pessoa
+estava como offline e só voltava 30 s depois, ou com Ctrl+Shift+R. Recarregar com o backend ainda
+subindo gravava a mesma marca de novo. O usuário pediu que a primeira falha não espere. A escala
+agora começa em 2 s e 5 s, e só a terceira falha seguida chega aos 30 s; quem respondeu nas
+últimas 24 h sobe 2 s → 5 s → 30 s e para aí. Máquina desligada de verdade paga duas tentativas a
+mais antes de esfriar, o que não pesa na VPN do iPhone (o problema lá eram 13–24 por minuto).
+
+Só a escala não resolveu o restart: medido com `systemctl --user restart`, o backend levou 10 s
+para parar e mais 4 s para subir, as três tentativas (2 s, 5 s) caíram dentro desses 14 s e a
+máquina ficou offline 23 s DEPOIS de voltar. Por isso volta a proteção que existia antes de
+22/09 (e que aquela data tinha tirado do servidor ativo): o servidor ativo e o dono da URL da
+página nunca recebem a marca, e tentam de novo em 1, 2, 4, 8, 16 s até o teto de 30 s, em memória.
+Marca antiga gravada para eles é apagada ao conectar.
 
 **O custo real não era bateria, era a VPN do iPhone.** Com o cabo USB e o `idevicesyslog`, o log de
 dentro do aparelho mostrou a mesma varredura acontecendo na extensão de rede do Tailscale
@@ -515,3 +616,14 @@ sem essa frase a pessoa liga, olha a sessão aberta, não vê efeito e conclui q
 Isto **não** reabre o que está em [harnesses.md](harnesses.md): lá a decisão é sobre o HANGAR usar
 function hooks para ler estado de sessão, e ela continua de pé. Este interruptor é o portão para o
 plugin de quem usa.
+
+## Documentos ativos sem acesso ao token
+
+22/09/2026. O visualizador usava uma URL com o token principal e `allow-scripts`: o HTML podia
+ler a própria URL mesmo sem `allow-same-origin`. A abertura em nova aba também perdia o sandbox.
+Arquivos citados e uploads agora usam `file_response`: HTML/XHTML ficam num iframe com URL `data:`,
+sem mesma origem nem referrer, dentro de uma página confiável. A codificação base64 é transmitida
+em blocos; SVG/XML continuam como arquivos, com scripts bloqueados por CSP. O ETag dos arquivos
+citados mudou para invalidar respostas antigas na revalidação; cache fresco anterior dura até 60s.
+No navegador embutido, o HTML executou JavaScript, mas não leu token pela URL, baseURI ou referrer,
+nem acessou a página pai ou o armazenamento. Sem mudanças na autorização de caminhos.
