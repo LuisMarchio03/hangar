@@ -153,7 +153,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
 
   // Só o que dá pra renderizar: interno cujo handler o Chat não passou (headless sem terminal,
   // por exemplo) sai da lista — a config diz a ordem, o gate diz a existência.
-  const atalhosVisiveis = $derived((shortcuts ?? defaultShortcuts()).filter((s) => {
+  const visibleShortcuts = $derived((shortcuts ?? defaultShortcuts()).filter((s) => {
     if (s.type !== 'internal') return true;
     switch (s.action) {
       case 'terminal': return !!onOpenTerminal;
@@ -163,7 +163,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
       case 'rodar': return !!onOpenRun;
     }
   }));
-  const hasActions = $derived(atalhosVisiveis.length > 0);
+  const hasActions = $derived(visibleShortcuts.length > 0);
   const navChave = $derived(workspaceSessionKey({ serverId, name: sessionName }));
   // A aba Navegador só existe na tab bar quando a sessão TEM navegador aberto (quem cria é o
   // botão da fileira ou o agente via hangar-preview open).
@@ -461,7 +461,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
          teclado pertence aos botões dela — a toolbar em si não é parada de Tab. -->
     <div class="ctx-actions" role="toolbar" aria-label={m.ctx_painel_titulo()} tabindex="-1"
          oncontextmenu={onEditShortcuts ? (e) => { e.preventDefault(); onEditShortcuts(); } : undefined}>
-      {#each atalhosVisiveis as s (s.id)}
+      {#each visibleShortcuts as s (s.id)}
         {#if s.type === 'internal' && s.action === 'terminal'}
           <button class="ctx-action terminal-btn" class:alert={terminalAlert} onclick={onOpenTerminal} aria-label={m.ctx_terminal()}>
             <span class="animated-icon" aria-hidden="true">
@@ -502,7 +502,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
         {:else if s.type === 'internal' && s.action === 'rodar'}
           <!-- Rodar atrás de um divisor: os outros abrem um painel, este dispara um processo no
                projeto. Só quando não é o primeiro — divisor abrindo a fileira é ruído. -->
-          {#if atalhosVisiveis[0] !== s}
+          {#if visibleShortcuts[0] !== s}
             <span class="acao-divisor" aria-hidden="true"></span>
           {/if}
           <button class="ctx-action run-btn" class:running={runRunning} onclick={onOpenRun}

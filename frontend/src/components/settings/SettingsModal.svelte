@@ -5,7 +5,7 @@
   import AppearanceSettings from './AppearanceSettings.svelte';
   import VozSettings from './VozSettings.svelte';
   import ServerSettings from './ServerSettings.svelte';
-  import AtalhosSettings from './AtalhosSettings.svelte';
+  import ShortcutsSettings from './ShortcutsSettings.svelte';
   import SobreSettings from './SobreSettings.svelte';
   import DiarioSettings from './DiarioSettings.svelte';
   import MaquinasSettings from './MaquinasSettings.svelte';
@@ -397,7 +397,7 @@
   {:else if telaAtual === 'voz'}
     <VozSettings {store} />
   {:else if telaAtual === 'atalhos'}
-    <AtalhosSettings apiTarget={alvo} />
+    <ShortcutsSettings apiTarget={alvo} />
   {:else if telaAtual === 'computer'}
     <ComputerControlSettings apiTarget={alvo} />
   {:else}

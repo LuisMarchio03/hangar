@@ -75,7 +75,7 @@
   import { parseStatusLine, queuedMessages } from '@hangar/core';
   import { runShortcutShell, sendsDirect } from '@hangar/core';
   import type { ShortcutSendText, ShortcutShell } from '@hangar/core';
-  import { shortcutsDe, carregarShortcuts } from '../lib/shortcuts.svelte';
+  import { shortcutsFor, loadShortcuts } from '../lib/shortcuts.svelte';
   import { abrirConfig } from '../lib/configNav';
   import { listServers, getActiveId, getBaseUrl, selectServer } from '../lib/auth';
   import { getIdentificador } from '../lib/peers';
@@ -1484,13 +1484,13 @@
       action('navegador', m.ctx_navegador(), alternarNavegador),
       // Atalhos customizados da fileira: mesma ação do botão, acessível por teclado. O detail é
       // o conteúdo — diz exatamente o que o Enter dispara.
-      ...atalhosCustom.map((s): WorkspaceAction => ({
+      ...customShortcuts.map((s): WorkspaceAction => ({
         id: `atalho-${s.id}`,
         title: s.label,
         detail: s.type === 'shell' ? s.command : s.text,
         keywords: ['atalho', 'shortcut', s.label],
         group: m.lista_atalhos(),
-        run: () => acionarAtalho(s),
+        run: () => triggerShortcut(s),
       })),
     ]);
     // Ao trocar a key servidor-aware ou desmontar este Chat, nenhum callback pode sobreviver.
@@ -2660,24 +2660,24 @@
   }
 
   // ── Atalhos configuráveis da fileira (lib/shortcuts.svelte.ts) ─────────────
-  const atalhos = $derived(shortcutsDe());
+  const shortcuts = $derived(shortcutsFor());
   // Só os customizados: no celular os internos já têm os botões/entradas de sempre — duplicar
   // Terminal/Anexos dentro do "⋯" seria a mesma ação com dois nomes.
-  const atalhosCustom = $derived(atalhos.filter(
+  const customShortcuts = $derived(shortcuts.filter(
     (s): s is ShortcutSendText | ShortcutShell => s.type !== 'internal'));
   $effect(() => {
     // A fileira segue no conjunto nativo; o erro de verdade aparece ao abrir a tela de Atalhos.
-    carregarShortcuts().catch((err) => console.error('shortcuts load error:', err));
+    loadShortcuts().catch((err) => console.error('shortcuts load error:', err));
   });
   // Atalho com a flag "confirmar antes": segura aqui e o ConfirmSheet decide.
-  let atalhoPendente = $state<ShortcutSendText | ShortcutShell | null>(null);
+  let pendingShortcut = $state<ShortcutSendText | ShortcutShell | null>(null);
 
-  function acionarAtalho(s: ShortcutSendText | ShortcutShell) {
-    if (s.confirm) { atalhoPendente = s; return; }
-    void executarAtalho(s);
+  function triggerShortcut(s: ShortcutSendText | ShortcutShell) {
+    if (s.confirm) { pendingShortcut = s; return; }
+    void runShortcut(s);
   }
 
-  async function executarAtalho(s: ShortcutSendText | ShortcutShell) {
+  async function runShortcut(s: ShortcutSendText | ShortcutShell) {
     // O 202 do shell é só "o processo nasceu", e o handleSend lança pro Composer mostrar — aqui
     // não há Composer no meio, então sem este aviso o clique falho não faz NADA em silêncio.
     try {
@@ -2878,8 +2878,8 @@
       onOpenRun={() => (runOpen = true)}
       {runRunning}
       onOpenAttachments={() => (anexosOpen = true)}
-      shortcuts={atalhos}
-      onShortcut={acionarAtalho}
+      {shortcuts}
+      onShortcut={triggerShortcut}
       onEditShortcuts={() => abrirConfig('atalhos', null)}
       onOpenActivity={hasActivity ? () => (ctxPanel.aba = 'atividade') : undefined}
       {activity}
@@ -3262,7 +3262,7 @@
 
   <RunSheet open={runOpen} {sessionName} onClose={() => (runOpen = false)} onRunningChange={(r) => (runRunning = r)} />
   <MoreSheet open={moreOpen} onClose={() => (moreOpen = false)}
-             shortcuts={atalhosCustom} onShortcut={acionarAtalho}
+             shortcuts={customShortcuts} onShortcut={triggerShortcut}
              onRun={() => (runOpen = true)} {runRunning}
              onActivity={(hasActivity || !!planName) ? () => (activityOpen = true) : undefined}
              onAttachments={() => (anexosOpen = true)}
@@ -3278,11 +3278,11 @@
                 message={sessionHeadless ? m.modo_confirmar_terminal_msg() : m.modo_confirmar_sem_terminal_msg()}
                 confirmLabel={sessionHeadless ? m.modo_abrir_no_terminal() : m.modo_continuar_sem_terminal()}
                 onConfirm={executarTrocaModo} onClose={() => (confirmaModo = false)} />
-  <ConfirmSheet open={atalhoPendente !== null}
-                title={atalhoPendente?.label ?? ''}
-                message={atalhoPendente?.type === 'shell' ? atalhoPendente.command : atalhoPendente?.text ?? null}
-                onConfirm={() => { const s = atalhoPendente; atalhoPendente = null; if (s) void executarAtalho(s); }}
-                onClose={() => (atalhoPendente = null)} />
+  <ConfirmSheet open={pendingShortcut !== null}
+                title={pendingShortcut?.label ?? ''}
+                message={pendingShortcut?.type === 'shell' ? pendingShortcut.command : pendingShortcut?.text ?? null}
+                onConfirm={() => { const s = pendingShortcut; pendingShortcut = null; if (s) void runShortcut(s); }}
+                onClose={() => (pendingShortcut = null)} />
   <AttachmentsSheet open={anexosOpen} {sessionName} onClose={() => (anexosOpen = false)}
                     onUsarNoDitado={usarAnexoNoDitado} />
 

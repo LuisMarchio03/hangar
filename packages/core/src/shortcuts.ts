@@ -42,7 +42,7 @@ export function defaultShortcuts(): Shortcut[] {
   return INTERNAL_ACTIONS.map((action) => ({ id: action, type: 'internal', action }));
 }
 
-function valido(item: unknown): item is Shortcut {
+function isValid(item: unknown): item is Shortcut {
   if (typeof item !== 'object' || item === null) return false;
   const o = item as Record<string, unknown>;
   if (typeof o.id !== 'string' || !o.id.trim()) return false;
@@ -70,20 +70,20 @@ function valido(item: unknown): item is Shortcut {
  * é descartado (não derruba a lista inteira). */
 export function resolveShortcuts(raw: string | null | undefined): Shortcut[] {
   if (!raw || !raw.trim()) return defaultShortcuts();
-  let dados: unknown;
+  let data: unknown;
   try {
-    dados = JSON.parse(raw);
+    data = JSON.parse(raw);
   } catch {
     return defaultShortcuts();
   }
-  if (!Array.isArray(dados)) return defaultShortcuts();
+  if (!Array.isArray(data)) return defaultShortcuts();
   // id repetido quebra o {#each} com chave: fica o primeiro.
   const seen = new Set<string>();
-  return dados.filter(valido).filter((s) => !seen.has(s.id) && !!seen.add(s.id));
+  return data.filter(isValid).filter((s) => !seen.has(s.id) && !!seen.add(s.id));
 }
 
-export function serializeShortcuts(lista: Shortcut[]): string {
-  return JSON.stringify(lista);
+export function serializeShortcuts(list: Shortcut[]): string {
+  return JSON.stringify(list);
 }
 
 /** true quando o atalho envia direto (padrão do send_text; flag desligada = pré-preencher). */

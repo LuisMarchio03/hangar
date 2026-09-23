@@ -1,15 +1,15 @@
 <script lang="ts">
-  // Editor da fileira de atalhos configurável (decisões da sessão de grilling de 2026-09-21):
-  // lista ordenada única (nativos + customizados), subir/descer, remover, formulário de
-  // adicionar/editar com ícone curado ou emoji, e "restaurar padrão" que apaga o override.
+  // Editor da fileira de atalhos configurável: lista ordenada única (nativos + customizados),
+  // subir/descer, remover, formulário de adicionar/editar com ícone curado ou emoji, e
+  // "restaurar padrão" que apaga o override.
   // O estado salvo mora no servidor (runtime_config.shortcuts) via lib/shortcuts.svelte.ts.
   import * as m from '../../paraglide/messages';
   import {
     defaultShortcuts, getCommands, getSessions,
     type Shortcut, type ShortcutInternalAction, type ShortcutSendText, type ShortcutShell,
   } from '@hangar/core';
-  import { carregarShortcuts, shortcutsDe, salvarShortcuts } from '../../lib/shortcuts.svelte';
-  import ShortcutIcon, { GLIFOS } from '../icons/ShortcutIcon.svelte';
+  import { loadShortcuts, shortcutsFor, saveShortcuts } from '../../lib/shortcuts.svelte';
+  import ShortcutIcon, { GLYPHS } from '../icons/ShortcutIcon.svelte';
   import type { Server } from '../../lib/auth';
 
   interface Props {
@@ -18,100 +18,100 @@
   let { apiTarget }: Props = $props();
   const serverId = $derived(apiTarget?.id ?? null);
 
-  let lista = $state<Shortcut[]>([]);
-  let carregando = $state(true);
-  let erroCarregar = $state(false);
-  let salvando = $state(false);
-  let salvo = $state(false);
-  let erroSalvar = $state('');
-  let sujo = $state(false);
+  let list = $state<Shortcut[]>([]);
+  let loading = $state(true);
+  let loadError = $state(false);
+  let saving = $state(false);
+  let saved = $state(false);
+  let saveError = $state('');
+  let dirty = $state(false);
 
-  async function carregar() {
+  async function load() {
     // Servidor fixado na entrada: se o alvo trocar durante a busca, a resposta velha não pode
     // sobrescrever a lista (e a edição) do servidor novo.
     const target = serverId;
-    carregando = true;
-    erroCarregar = false;
+    loading = true;
+    loadError = false;
     try {
-      await carregarShortcuts(target);
+      await loadShortcuts(target);
       if (target !== serverId) return;
-      lista = shortcutsDe(target).map((s) => ({ ...s }));
-      sujo = false;
+      list = shortcutsFor(target).map((s) => ({ ...s }));
+      dirty = false;
     } catch (err) {
       if (target !== serverId) return;
       console.error('shortcuts load error:', err);
-      erroCarregar = true;
+      loadError = true;
     } finally {
-      if (target === serverId) carregando = false;
+      if (target === serverId) loading = false;
     }
   }
-  $effect(() => { serverId; void carregar(); });
+  $effect(() => { serverId; void load(); });
 
-  async function salvar() {
-    if (salvando) return;
-    salvando = true;
-    erroSalvar = '';
+  async function save() {
+    if (saving) return;
+    saving = true;
+    saveError = '';
     try {
-      await salvarShortcuts(lista, serverId);
-      sujo = false;
-      salvo = true;
-      setTimeout(() => (salvo = false), 2500);
+      await saveShortcuts(list, serverId);
+      dirty = false;
+      saved = true;
+      setTimeout(() => (saved = false), 2500);
     } catch (e) {
       // Erro de validação do backend chega como veio ("shortcuts: item 2 …").
-      erroSalvar = e instanceof Error ? e.message : String(e);
+      saveError = e instanceof Error ? e.message : String(e);
     } finally {
-      salvando = false;
+      saving = false;
     }
   }
 
-  async function restaurar() {
-    if (salvando) return;
-    salvando = true;
-    erroSalvar = '';
+  async function restoreDefaults() {
+    if (saving) return;
+    saving = true;
+    saveError = '';
     try {
-      await salvarShortcuts(null, serverId);
-      lista = defaultShortcuts();
-      sujo = false;
+      await saveShortcuts(null, serverId);
+      list = defaultShortcuts();
+      dirty = false;
     } catch (e) {
-      erroSalvar = e instanceof Error ? e.message : String(e);
+      saveError = e instanceof Error ? e.message : String(e);
     } finally {
-      salvando = false;
+      saving = false;
     }
   }
 
   // ── Lista ───────────────────────────────────────────────────────────────────
-  const INTERNO_ROTULO: Record<ShortcutInternalAction, () => string> = {
+  const INTERNAL_LABEL: Record<ShortcutInternalAction, () => string> = {
     terminal: m.ctx_terminal,
     modo: m.atalhos_interno_modo,
     navegador: m.ctx_navegador,
     anexos: m.ctx_anexos,
     rodar: m.ctx_rodar,
   };
-  const INTERNO_GLIFO: Record<ShortcutInternalAction, string> = {
+  const INTERNAL_ICON: Record<ShortcutInternalAction, string> = {
     terminal: 'glifo:terminal', modo: 'glifo:git', navegador: 'glifo:globe',
     anexos: 'glifo:folder', rodar: 'glifo:play',
   };
-  const nativosAusentes = $derived(
-    (Object.keys(INTERNO_ROTULO) as ShortcutInternalAction[]).filter(
-      (a) => !lista.some((s) => s.type === 'internal' && s.action === a)));
+  const missingNatives = $derived(
+    (Object.keys(INTERNAL_LABEL) as ShortcutInternalAction[]).filter(
+      (a) => !list.some((s) => s.type === 'internal' && s.action === a)));
 
-  function mover(i: number, delta: -1 | 1) {
+  function move(i: number, delta: -1 | 1) {
     const j = i + delta;
-    if (j < 0 || j >= lista.length) return;
-    const nova = [...lista];
-    [nova[i], nova[j]] = [nova[j], nova[i]];
-    lista = nova;
-    sujo = true;
+    if (j < 0 || j >= list.length) return;
+    const next = [...list];
+    [next[i], next[j]] = [next[j], next[i]];
+    list = next;
+    dirty = true;
   }
 
   // ── Arrastar pra reordenar. HTML5 DnD não responde ao toque em tablet (regra do repo), então
   // os botões ↑/↓ ficam — são a alternativa exigida pela WCAG 2.2 SC 2.5.7, não redundância. ──
   let dragIdx = $state<number | null>(null);
   // A lista se reordena durante o arrasto; cancelado (Esc, soltar fora) ele volta a como estava.
-  let beforeDrag: { lista: Shortcut[]; sujo: boolean } | null = null;
+  let beforeDrag: { list: Shortcut[]; dirty: boolean } | null = null;
   function dragStart(e: DragEvent, i: number) {
     dragIdx = i;
-    beforeDrag = { lista, sujo };
+    beforeDrag = { list, dirty };
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', String(i));
@@ -120,91 +120,91 @@
   function dragOver(e: DragEvent, i: number) {
     e.preventDefault();       // sem isto o drop é recusado e o arrasto "volta"
     if (dragIdx === null || dragIdx === i) return;
-    const nova = [...lista];
-    const [item] = nova.splice(dragIdx, 1);
-    nova.splice(i, 0, item);
-    lista = nova;
+    const next = [...list];
+    const [item] = next.splice(dragIdx, 1);
+    next.splice(i, 0, item);
+    list = next;
     dragIdx = i;
-    sujo = true;
+    dirty = true;
   }
   function dragEnd(e: DragEvent) {
     if (e.dataTransfer?.dropEffect === 'none' && beforeDrag) {
-      lista = beforeDrag.lista;
-      sujo = beforeDrag.sujo;
+      list = beforeDrag.list;
+      dirty = beforeDrag.dirty;
     }
     beforeDrag = null;
     dragIdx = null;
   }
-  function remover(i: number) {
-    lista = lista.filter((_, k) => k !== i);
-    sujo = true;
+  function remove(i: number) {
+    list = list.filter((_, k) => k !== i);
+    dirty = true;
   }
-  function reporNativo(a: ShortcutInternalAction) {
-    lista = [...lista, { id: a, type: 'internal', action: a }];
-    sujo = true;
+  function restoreNative(a: ShortcutInternalAction) {
+    list = [...list, { id: a, type: 'internal', action: a }];
+    dirty = true;
   }
 
   // ── Formulário (adicionar/editar customizado) ───────────────────────────────
-  let formAberto = $state(false);
-  let editando = $state<number | null>(null);   // índice na lista; null = novo
-  let fTipo = $state<'send_text' | 'shell'>('send_text');
-  let fRotulo = $state('');
-  let fGlifo = $state('bolt');
+  let formOpen = $state(false);
+  let editingIdx = $state<number | null>(null);   // índice na lista; null = novo
+  let fType = $state<'send_text' | 'shell'>('send_text');
+  let fLabel = $state('');
+  let fGlyph = $state('bolt');
   let fEmoji = $state('');
-  let fConteudo = $state('');
+  let fContent = $state('');
   let fSendDirect = $state(true);
   let fConfirm = $state(false);
 
-  function abrirNovo() {
-    editando = null;
-    fTipo = 'send_text'; fRotulo = ''; fGlifo = 'bolt'; fEmoji = '';
-    fConteudo = ''; fSendDirect = true; fConfirm = false;
-    formAberto = true;
+  function openNew() {
+    editingIdx = null;
+    fType = 'send_text'; fLabel = ''; fGlyph = 'bolt'; fEmoji = '';
+    fContent = ''; fSendDirect = true; fConfirm = false;
+    formOpen = true;
   }
-  function abrirEdicao(i: number) {
-    const s = lista[i];
+  function openEdit(i: number) {
+    const s = list[i];
     if (s.type === 'internal') return;
-    editando = i;
-    fTipo = s.type;
-    fRotulo = s.label;
-    fConteudo = s.type === 'shell' ? s.command : s.text;
+    editingIdx = i;
+    fType = s.type;
+    fLabel = s.label;
+    fContent = s.type === 'shell' ? s.command : s.text;
     fSendDirect = s.type === 'send_text' ? s.send_direct !== false : true;
     fConfirm = s.confirm === true;
-    if (s.icon?.startsWith('emoji:')) { fEmoji = s.icon.slice(6); fGlifo = 'bolt'; }
-    else { fEmoji = ''; fGlifo = s.icon?.startsWith('glifo:') ? s.icon.slice(6) : 'bolt'; }
-    formAberto = true;
+    if (s.icon?.startsWith('emoji:')) { fEmoji = s.icon.slice(6); fGlyph = 'bolt'; }
+    else { fEmoji = ''; fGlyph = s.icon?.startsWith('glifo:') ? s.icon.slice(6) : 'bolt'; }
+    formOpen = true;
   }
-  const formValido = $derived(!!fRotulo.trim() && !!fConteudo.trim());
-  function confirmarForm() {
-    if (!formValido) return;
-    const icon = fEmoji.trim() ? `emoji:${fEmoji.trim()}` : `glifo:${fGlifo}`;
-    const base = { label: fRotulo.trim(), icon, ...(fConfirm ? { confirm: true } : {}) };
-    const novo: ShortcutSendText | ShortcutShell = fTipo === 'shell'
-      ? { id: idDoForm(), type: 'shell', command: fConteudo.trim(), ...base }
-      : { id: idDoForm(), type: 'send_text', text: fConteudo.trim(),
+  const formValid = $derived(!!fLabel.trim() && !!fContent.trim());
+  function submitForm() {
+    if (!formValid) return;
+    const icon = fEmoji.trim() ? `emoji:${fEmoji.trim()}` : `glifo:${fGlyph}`;
+    const base = { label: fLabel.trim(), icon, ...(fConfirm ? { confirm: true } : {}) };
+    const shortcut: ShortcutSendText | ShortcutShell = fType === 'shell'
+      ? { id: formId(), type: 'shell', command: fContent.trim(), ...base }
+      : { id: formId(), type: 'send_text', text: fContent.trim(),
           ...(fSendDirect ? {} : { send_direct: false }), ...base };
-    if (editando === null) lista = [...lista, novo];
-    else lista = lista.map((s, i) => (i === editando ? novo : s));
-    sujo = true;
-    formAberto = false;
+    if (editingIdx === null) list = [...list, shortcut];
+    else list = list.map((s, i) => (i === editingIdx ? shortcut : s));
+    dirty = true;
+    formOpen = false;
   }
-  function idDoForm(): string {
-    if (editando !== null) return lista[editando].id;
+  function formId(): string {
+    if (editingIdx !== null) return list[editingIdx].id;
     return `a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   }
 
   // ── Sugestão de skill (datalist): comandos de uma sessão viva do servidor ativo. Sem sessão,
   // o campo fica livre — a sugestão é conforto, não requisito. ─────────────────────────────────
-  let sugestoes = $state<string[]>([]);
+  let suggestions = $state<string[]>([]);
   $effect(() => {
-    if (!formAberto || fTipo !== 'send_text' || sugestoes.length) return;
+    if (!formOpen || fType !== 'send_text' || suggestions.length) return;
     void (async () => {
       try {
-        const sessoes = await getSessions();
-        const viva = sessoes.find((s) => s.state !== 'dead');
-        if (!viva) return;
-        const cmds = await getCommands(viva.name);
-        sugestoes = cmds.map((c) => c.display ?? `/${c.name}`);
+        const sessions = await getSessions();
+        const alive = sessions.find((s) => s.state !== 'dead');
+        if (!alive) return;
+        const cmds = await getCommands(alive.name);
+        suggestions = cmds.map((c) => c.display ?? `/${c.name}`);
       } catch { /* sem sugestão, campo livre */ }
     })();
   });
@@ -213,69 +213,69 @@
 <div class="at">
   <p class="sub">{m.atalhos_sub()}</p>
 
-  {#if carregando}
+  {#if loading}
     <p class="estado">{m.comum_carregando()}</p>
-  {:else if erroCarregar}
+  {:else if loadError}
     <p class="estado erro">{m.atalhos_erro_carregar()}</p>
-    <button class="btn" onclick={() => void carregar()}>{m.config_server_tentar_de_novo()}</button>
+    <button class="btn" onclick={() => void load()}>{m.config_server_tentar_de_novo()}</button>
   {:else}
-    {#if lista.length === 0}
+    {#if list.length === 0}
       <p class="estado">{m.atalhos_vazio()}</p>
     {/if}
     <ul class="linhas">
-      {#each lista as s, i (s.id)}
+      {#each list as s, i (s.id)}
         <li class="linha" class:arrastando={dragIdx === i} draggable="true"
             ondragstart={(e) => dragStart(e, i)} ondragover={(e) => dragOver(e, i)}
             ondragend={dragEnd}>
           <span class="alca" aria-hidden="true">⠿</span>
-          <span class="ico"><ShortcutIcon icon={s.type === 'internal' ? INTERNO_GLIFO[s.action] : s.icon} /></span>
+          <span class="ico"><ShortcutIcon icon={s.type === 'internal' ? INTERNAL_ICON[s.action] : s.icon} /></span>
           <span class="txt">
-            <span class="rotulo">{s.type === 'internal' ? INTERNO_ROTULO[s.action]() : s.label}</span>
+            <span class="rotulo">{s.type === 'internal' ? INTERNAL_LABEL[s.action]() : s.label}</span>
             {#if s.type !== 'internal'}
               <span class="detalhe">{s.type === 'shell' ? s.command : s.text}</span>
             {/if}
           </span>
           <span class="acoes">
             {#if s.type !== 'internal'}
-              <button class="mini" onclick={() => abrirEdicao(i)} aria-label={m.atalhos_editar()}>✎</button>
+              <button class="mini" onclick={() => openEdit(i)} aria-label={m.atalhos_editar()}>✎</button>
             {/if}
-            <button class="mini" onclick={() => mover(i, -1)} disabled={i === 0} aria-label={m.atalhos_subir()}>↑</button>
-            <button class="mini" onclick={() => mover(i, 1)} disabled={i === lista.length - 1} aria-label={m.atalhos_descer()}>↓</button>
-            <button class="mini" onclick={() => remover(i)} aria-label={m.atalhos_remover()}>✕</button>
+            <button class="mini" onclick={() => move(i, -1)} disabled={i === 0} aria-label={m.atalhos_subir()}>↑</button>
+            <button class="mini" onclick={() => move(i, 1)} disabled={i === list.length - 1} aria-label={m.atalhos_descer()}>↓</button>
+            <button class="mini" onclick={() => remove(i)} aria-label={m.atalhos_remover()}>✕</button>
           </span>
         </li>
       {/each}
     </ul>
 
-    {#if nativosAusentes.length}
+    {#if missingNatives.length}
       <div class="repor">
         <span>{m.atalhos_repor()}</span>
-        {#each nativosAusentes as a (a)}
-          <button class="chip" onclick={() => reporNativo(a)}>+ {INTERNO_ROTULO[a]()}</button>
+        {#each missingNatives as a (a)}
+          <button class="chip" onclick={() => restoreNative(a)}>+ {INTERNAL_LABEL[a]()}</button>
         {/each}
       </div>
     {/if}
 
-    {#if formAberto}
+    {#if formOpen}
       <div class="form">
         <label class="campo">
           <span>{m.atalhos_tipo()}</span>
-          <select bind:value={fTipo} disabled={editando !== null}>
+          <select bind:value={fType} disabled={editingIdx !== null}>
             <option value="send_text">{m.atalhos_tipo_send()}</option>
             <option value="shell">{m.atalhos_tipo_shell()}</option>
           </select>
         </label>
         <label class="campo">
           <span>{m.atalhos_rotulo()}</span>
-          <input type="text" bind:value={fRotulo} maxlength="24" />
+          <input type="text" bind:value={fLabel} maxlength="24" />
         </label>
         <div class="campo">
           <span>{m.atalhos_icone()}</span>
           <div class="glifos" role="radiogroup" aria-label={m.atalhos_icone()}>
-            {#each Object.keys(GLIFOS) as g (g)}
-              <button type="button" class="glifo" class:sel={!fEmoji.trim() && fGlifo === g}
-                      role="radio" aria-checked={!fEmoji.trim() && fGlifo === g} aria-label={g}
-                      onclick={() => { fGlifo = g; fEmoji = ''; }}>
+            {#each Object.keys(GLYPHS) as g (g)}
+              <button type="button" class="glifo" class:sel={!fEmoji.trim() && fGlyph === g}
+                      role="radio" aria-checked={!fEmoji.trim() && fGlyph === g} aria-label={g}
+                      onclick={() => { fGlyph = g; fEmoji = ''; }}>
                 <ShortcutIcon icon={`glifo:${g}`} />
               </button>
             {/each}
@@ -284,16 +284,16 @@
           </div>
         </div>
         <label class="campo">
-          <span>{fTipo === 'shell' ? m.atalhos_comando() : m.atalhos_texto()}</span>
-          <input type="text" bind:value={fConteudo} list={fTipo === 'send_text' ? 'atalho-skills' : undefined}
-                 placeholder={fTipo === 'shell' ? m.atalhos_comando_dica() : m.atalhos_texto_dica()} />
-          {#if fTipo === 'send_text'}
+          <span>{fType === 'shell' ? m.atalhos_comando() : m.atalhos_texto()}</span>
+          <input type="text" bind:value={fContent} list={fType === 'send_text' ? 'atalho-skills' : undefined}
+                 placeholder={fType === 'shell' ? m.atalhos_comando_dica() : m.atalhos_texto_dica()} />
+          {#if fType === 'send_text'}
             <datalist id="atalho-skills">
-              {#each sugestoes as sk (sk)}<option value={sk}></option>{/each}
+              {#each suggestions as sk (sk)}<option value={sk}></option>{/each}
             </datalist>
           {/if}
         </label>
-        {#if fTipo === 'send_text'}
+        {#if fType === 'send_text'}
           <label class="liga">
             <input type="checkbox" bind:checked={fSendDirect} />
             <span>{m.atalhos_send_direct()}</span>
@@ -305,22 +305,22 @@
           <span>{m.atalhos_confirm()}</span>
         </label>
         <div class="form-acoes">
-          <button class="btn" onclick={() => (formAberto = false)}>{m.comum_cancelar()}</button>
-          <button class="btn primario" onclick={confirmarForm} disabled={!formValido}>{m.comum_confirmar()}</button>
+          <button class="btn" onclick={() => (formOpen = false)}>{m.comum_cancelar()}</button>
+          <button class="btn primario" onclick={submitForm} disabled={!formValid}>{m.comum_confirmar()}</button>
         </div>
       </div>
     {:else}
-      <button class="btn" onclick={abrirNovo}>{m.atalhos_add()}</button>
+      <button class="btn" onclick={openNew}>{m.atalhos_add()}</button>
     {/if}
 
     <div class="rodape">
-      <button class="btn" onclick={() => void restaurar()} disabled={salvando}
+      <button class="btn" onclick={() => void restoreDefaults()} disabled={saving}
               title={m.atalhos_restaurar_ajuda()}>{m.atalhos_restaurar()}</button>
       <span class="feedback">
-        {#if erroSalvar}<span class="erro">{erroSalvar}</span>
-        {:else if salvo}{m.atalhos_salvo()}{/if}
+        {#if saveError}<span class="erro">{saveError}</span>
+        {:else if saved}{m.atalhos_salvo()}{/if}
       </span>
-      <button class="btn primario" onclick={() => void salvar()} disabled={!sujo || salvando}>
+      <button class="btn primario" onclick={() => void save()} disabled={!dirty || saving}>
         {m.atalhos_salvar()}
       </button>
     </div>

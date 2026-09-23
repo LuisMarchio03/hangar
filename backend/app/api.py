@@ -6174,13 +6174,13 @@ def shortcut_shell(name: str, body: ShortcutShellBody):
     # so existe no POSIX (no Windows e ignorado calado); la vale grupo proprio e sem console,
     # em valor literal porque subprocess.CREATE_* so existe no Windows.
     cwd = _session_cwd(name)
-    comando = body.command.strip()
-    if not comando:
+    command = body.command.strip()
+    if not command:
         raise HTTPException(400, detail=erro("erro_shortcut_vazio", "comando vazio"))
     detach = ({"creationflags": 0x00000200 | 0x08000000} if os.name == "nt"
               else {"start_new_session": True})
     try:
-        proc = subprocess.Popen(comando, shell=True, cwd=cwd,
+        proc = subprocess.Popen(command, shell=True, cwd=cwd,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL, **detach)
     except OSError as e:

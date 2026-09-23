@@ -277,7 +277,7 @@ class Settings(BaseSettings):
     # `runtime_config.EDITAVEIS`, porque sem ele o campo responde `None` — e um interruptor que
     # nasce sem valor nenhum na tela não sabe dizer se está ligado ou desligado.
     jev_padrao: bool = False
-    # Fileira de atalhos do painel de sessão (JSON numa string; ver runtime_config._validar_shortcuts).
+    # Fileira de atalhos do painel de sessão (JSON numa string; ver runtime_config._validate_shortcuts).
     # Vazio = conjunto nativo. Default aqui pelo mesmo motivo do jev_padrao: sem ele o get responde None.
     shortcuts: str = ""
     # Chave da Groq pra transcricao de audio (whisper-large-v3-turbo). Aceita CP_GROQ_API_KEY (padrao

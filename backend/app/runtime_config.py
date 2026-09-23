@@ -99,7 +99,7 @@ EDITAVEIS: dict[str, type] = {
     # config.resolve_scan_roots, que le daqui primeiro.
     "scan_roots": str,
     # Fileira de atalhos do painel de sessao. JSON numa string porque _coagir so conhece escalar;
-    # vazio = conjunto nativo. Shape validado em _validar_shortcuts — config quebrada aqui viraria
+    # vazio = conjunto nativo. Shape validado em _validate_shortcuts — config quebrada aqui viraria
     # fileira sumida sem erro em lugar nenhum.
     "shortcuts": str,
 }
@@ -217,37 +217,37 @@ def mascarar(valor: str) -> str:
 _SHORTCUT_INTERNAL_ACTIONS = {"terminal", "modo", "navegador", "anexos", "rodar"}
 
 
-def _validar_shortcuts(texto: str) -> None:
+def _validate_shortcuts(text: str) -> None:
     """Recusa na gravacao o que o front nao conseguiria renderizar. O resolve do front e
     tolerante (config invalida cai no conjunto nativo), entao sem esta trava um typo salvo
     pela API viraria "minha fileira voltou ao padrao" sem nenhum erro visivel."""
     try:
-        itens = json.loads(texto)
+        items = json.loads(text)
     except ValueError:
         raise ValueError("shortcuts: JSON invalido") from None
-    if not isinstance(itens, list):
+    if not isinstance(items, list):
         raise ValueError("shortcuts: esperado uma lista de atalhos")
-    for i, item in enumerate(itens, start=1):
+    for i, item in enumerate(items, start=1):
         if not isinstance(item, dict):
             raise ValueError(f"shortcuts: item {i} nao e um objeto")
         if not isinstance(item.get("id"), str) or not item["id"].strip():
             raise ValueError(f"shortcuts: item {i} sem id")
-        tipo = item.get("type")
-        if tipo == "internal":
+        kind = item.get("type")
+        if kind == "internal":
             if item.get("action") not in _SHORTCUT_INTERNAL_ACTIONS:
                 raise ValueError(
                     f"shortcuts: item {i} tem action desconhecida "
                     f"(use uma de: {', '.join(sorted(_SHORTCUT_INTERNAL_ACTIONS))})"
                 )
-        elif tipo == "send_text":
+        elif kind == "send_text":
             if not isinstance(item.get("text"), str) or not item["text"].strip():
                 raise ValueError(f"shortcuts: item {i} (send_text) sem texto a enviar")
-        elif tipo == "shell":
+        elif kind == "shell":
             if not isinstance(item.get("command"), str) or not item["command"].strip():
                 raise ValueError(f"shortcuts: item {i} (shell) sem comando")
         else:
-            raise ValueError(f"shortcuts: item {i} tem type desconhecido '{tipo}'")
-        if tipo in ("send_text", "shell") and (
+            raise ValueError(f"shortcuts: item {i} tem type desconhecido '{kind}'")
+        if kind in ("send_text", "shell") and (
             not isinstance(item.get("label"), str) or not item["label"].strip()
         ):
             raise ValueError(f"shortcuts: item {i} sem rotulo")
@@ -328,7 +328,7 @@ def _coagir(campo: str, valor: Any) -> Any:
             if not urlparse(entrada).netloc:
                 raise ValueError(f"term_origins: '{entrada}' nao tem endereco (ex: https://app.exemplo.com)")
     if campo == "shortcuts" and texto:
-        _validar_shortcuts(texto)
+        _validate_shortcuts(texto)
     if campo in ("transcription_base_url", "llm_base_url", "llm_briefing_base_url") and texto and not (texto.startswith("http://") or texto.startswith("https://")):
         # Mesmo argumento do editor: antes so o dono da maquina escolhia o endpoint (env), agora o
         # celular escreve. Aceita vazio (volta ao padrao) ou uma URL http(s) de verdade.

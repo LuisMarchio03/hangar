@@ -75,37 +75,37 @@
   let editIdx = $state<number | null>(null);   // índice em `custom`; null = novo
   let fLabel = $state('');
   let fCmd = $state('');
-  let salvandoCustom = $state(false);
-  const formValido = $derived(!!fLabel.trim() && !!fCmd.trim());
+  let savingCustom = $state(false);
+  const formValid = $derived(!!fLabel.trim() && !!fCmd.trim());
 
-  function abrirNovo() {
+  function openNew() {
     editIdx = null; fLabel = ''; fCmd = '';
     formOpen = true;
   }
-  function abrirEdicao(i: number) {
+  function openEdit(i: number) {
     editIdx = i; fLabel = custom[i].label; fCmd = custom[i].command;
     formOpen = true;
   }
-  async function gravar(lista: { label: string; command: string }[]) {
-    salvandoCustom = true;
+  async function saveCustom(commands: { label: string; command: string }[]) {
+    savingCustom = true;
     err = null;
     try {
-      custom = await setCustomRunners(sessionName, lista);
+      custom = await setCustomRunners(sessionName, commands);
       formOpen = false;
     } catch (e) {
       err = String(e);
     } finally {
-      salvandoCustom = false;
+      savingCustom = false;
     }
   }
-  function confirmarForm() {
-    if (!formValido) return;
+  function submitForm() {
+    if (!formValid) return;
     const item = { label: fLabel.trim(), command: fCmd.trim() };
     const base = custom.map((c) => ({ label: c.label, command: c.command }));
-    void gravar(editIdx === null ? [...base, item] : base.map((c, i) => (i === editIdx ? item : c)));
+    void saveCustom(editIdx === null ? [...base, item] : base.map((c, i) => (i === editIdx ? item : c)));
   }
-  function removerCustom(i: number) {
-    void gravar(custom.filter((_, k) => k !== i).map((c) => ({ label: c.label, command: c.command })));
+  function removeCustom(i: number) {
+    void saveCustom(custom.filter((_, k) => k !== i).map((c) => ({ label: c.label, command: c.command })));
   }
 </script>
 
@@ -124,8 +124,8 @@
               <span class="run-label">{r.label}</span>
               <span class="run-cmd">{r.command}</span>
             </button>
-            <button class="mini" onclick={() => abrirEdicao(i)} aria-label={m.atalhos_editar()}>✎</button>
-            <button class="mini" onclick={() => removerCustom(i)} disabled={salvandoCustom}
+            <button class="mini" onclick={() => openEdit(i)} aria-label={m.atalhos_editar()}>✎</button>
+            <button class="mini" onclick={() => removeCustom(i)} disabled={savingCustom}
                     aria-label={m.atalhos_remover()}>✕</button>
           </li>
         {/each}
@@ -140,13 +140,13 @@
                aria-label={m.atalhos_comando()} />
         <div class="form-acoes">
           <button class="act" onclick={() => (formOpen = false)}>{m.comum_cancelar()}</button>
-          <button class="act act--ok" onclick={confirmarForm} disabled={!formValido || salvandoCustom}>
+          <button class="act act--ok" onclick={submitForm} disabled={!formValid || savingCustom}>
             {m.comum_confirmar()}
           </button>
         </div>
       </div>
     {:else}
-      <button class="add" onclick={abrirNovo}>{m.run_add_comando()}</button>
+      <button class="add" onclick={openNew}>{m.run_add_comando()}</button>
     {/if}
 
     {#if detected.length === 0 && custom.length === 0}

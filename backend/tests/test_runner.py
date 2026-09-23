@@ -244,7 +244,7 @@ def test_alvo_do_kill_e_o_da_plataforma(monkeypatch):
     assert kill[-1] == (f"={slug}" if os.name == "posix" else slug)
 
 
-def test_custom_commands_roundtrip_e_convivio_com_remembered(tmp_path, monkeypatch):
+def test_custom_commands_roundtrip_alongside_remembered(tmp_path, monkeypatch):
     from app import runner
     from app.config import settings
     monkeypatch.setattr(settings, "projects_dir", str(tmp_path / "projects"))
@@ -265,7 +265,7 @@ def test_custom_commands_roundtrip_e_convivio_com_remembered(tmp_path, monkeypat
     assert runner.remembered(cwd) == "uv run uvicorn app:app"
 
 
-def test_prefs_formato_antigo_string_continua_lido(tmp_path, monkeypatch):
+def test_prefs_old_string_format_is_still_read(tmp_path, monkeypatch):
     # Arquivo da versao anterior: {cwd: "comando"}. Ler tolera; gravar migra pro dict.
     import json as _json
     from app import runner
@@ -281,7 +281,7 @@ def test_prefs_formato_antigo_string_continua_lido(tmp_path, monkeypatch):
     assert runner.custom_commands("/proj/velho")[0].command == "make x"
 
 
-def test_custom_commands_item_malformado_e_descartado(tmp_path, monkeypatch):
+def test_custom_commands_drops_malformed_items(tmp_path, monkeypatch):
     import json as _json
     from app import runner
     from app.config import settings

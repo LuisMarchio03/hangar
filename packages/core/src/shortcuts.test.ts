@@ -25,12 +25,12 @@ describe('resolveShortcuts', () => {
   });
 
   it('item individual inválido é descartado sem derrubar a lista', () => {
-    const lista: Shortcut[] = [
+    const list: Shortcut[] = [
       { id: 'terminal', type: 'internal', action: 'terminal' },
       { id: 'a1', type: 'send_text', label: 'Relatório', text: '/relatorio-pm' },
     ];
-    const raw = JSON.stringify([...lista, { id: 'x', type: 'foguete' }, { type: 'shell' }]);
-    expect(resolveShortcuts(raw)).toEqual(lista);
+    const raw = JSON.stringify([...list, { id: 'x', type: 'foguete' }, { type: 'shell' }]);
+    expect(resolveShortcuts(raw)).toEqual(list);
   });
 
   it('opcional com tipo errado descarta o item; id repetido fica só o primeiro', () => {
@@ -45,11 +45,11 @@ describe('resolveShortcuts', () => {
   });
 
   it('roundtrip serialize → resolve preserva a lista', () => {
-    const lista: Shortcut[] = [
+    const list: Shortcut[] = [
       { id: 'a2', type: 'shell', label: 'Editor', command: 'code .', confirm: true },
       { id: 'rodar', type: 'internal', action: 'rodar' },
     ];
-    expect(resolveShortcuts(serializeShortcuts(lista))).toEqual(lista);
+    expect(resolveShortcuts(serializeShortcuts(list))).toEqual(list);
   });
 });
 
