@@ -73,7 +73,9 @@
   import { hasSeam, mergeHistoryWithLive } from '@hangar/core';
   import { especificidade, donoDaLinha } from '@hangar/core';
   import { parseStatusLine, queuedMessages } from '@hangar/core';
-  import { listServers, getActiveId, getBaseUrl } from '../lib/auth';
+  import { listServers, getActiveId, getBaseUrl, selectServer } from '../lib/auth';
+  import { getIdentificador } from '../lib/peers';
+  import { destinoDoRemetente } from '../lib/remetente';
   import { createActivityFolder } from '@hangar/core';
   import type { ChatEvent, StateEvent, StatsEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail, UploadFile } from '@hangar/core';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
@@ -2642,6 +2644,17 @@
     avisoErrTimer = setTimeout(() => (avisoErr = ''), 8000);
   }
 
+  // Chip "de: X" do recado. `X` pode ser `servidor::sessao`: abrir isso como nome no servidor ativo
+  // dava "sessão não encontrada".
+  async function abrirRemetente(from: string) {
+    const cache = sessionsStore.identities;
+    const destino = await destinoDoRemetente(from, listServers(), getActiveId(),
+      async (s) => cache.get(s.id) ?? (await getIdentificador(s)).identificador);
+    if (!destino) { mostrarAviso(m.user_remetente_fora_do_aparelho({ n: from })); return; }
+    if (destino.serverId && !selectServer(destino.serverId)) return;
+    onNavigateToChat(destino.name);
+  }
+
   // Trava de um envio por vez (mesma do BoardCard): o /select agora le o cursor do picker, corrige
   // e so entao da Enter — dois toques rapidos leriam a mesma tela e se atropelariam no meio.
   let selBusy = $state(false);
@@ -2998,7 +3011,7 @@
       onAnswer={handleAnswer}
       onAskClose={closeAsk}
       onForward={(t) => (forwardText = t)}
-      onOpenSession={onNavigateToChat}
+      onOpenSession={abrirRemetente}
       onOpenOrq={() => (orqOpen = true)}
       onDescartarFila={descartarFila}
     />
