@@ -694,13 +694,16 @@ def test_post_bastao_de_sessao_morta_usa_o_cwd_do_transcript(api_client_bastao, 
     monkeypatch.setattr(api_mod, "create_session", fake_create)
     monkeypatch.setattr(api_mod, "_drain_session", lambda name: None)
     monkeypatch.setattr(api_mod, "_nome_ocupado", lambda nome: False)
-    monkeypatch.setattr(api_mod, "archive_cwd", lambda *a, **k: "/cwd/da/origem")
+    # Pasta que EXISTE: sessão nunca nasce em pasta sumida, e o bastão recusa antes de criar.
+    origem = tmp_path / "origem"
+    origem.mkdir()
+    monkeypatch.setattr(api_mod, "archive_cwd", lambda *a, **k: str(origem))
     with patch("app.api.registry.list", return_value=[]):
         r = api_client_bastao.post("/api/sessions/morta/bastao", headers={"Authorization": "Bearer secret"},
                                    json={"name": "morta-cont", "project": proj, "session_id": sid,
                                          "origem_config_dir": cfg})
     assert r.status_code == 200, r.text
-    assert criadas[0].cwd == "/cwd/da/origem"
+    assert criadas[0].cwd == str(origem)
 
 
 def test_post_bastao_origem_morta_usa_origem_provider_pra_achar_o_transcript(api_client_bastao, monkeypatch, tmp_path):
@@ -726,7 +729,9 @@ def test_post_bastao_origem_morta_usa_origem_provider_pra_achar_o_transcript(api
     monkeypatch.setattr(api_mod, "_drain_session", lambda name: None)
     monkeypatch.setattr(api_mod, "_nome_ocupado", lambda nome: False)
     monkeypatch.setattr(api_mod, "archive_jsonl", fake_jsonl)
-    monkeypatch.setattr(api_mod, "archive_cwd", lambda *a, **k: "/cwd/da/origem-pi")
+    origem = tmp_path / "origem-pi"
+    origem.mkdir()
+    monkeypatch.setattr(api_mod, "archive_cwd", lambda *a, **k: str(origem))
     with patch("app.api.registry.list", return_value=[]):
         r = api_client_bastao.post("/api/sessions/morta/bastao", headers={"Authorization": "Bearer secret"},
                                    json={"name": "morta-cont", "project": proj, "session_id": sid,

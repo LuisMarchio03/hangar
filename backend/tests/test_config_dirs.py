@@ -27,7 +27,9 @@ def test_autoscan_finds_login_dirs_with_projects(tmp_path, monkeypatch):
     _make_dir(tmp_path, ".claude-nologin", login=False)
     _make_dir(tmp_path, ".claude-noproj", projects=False)
     out = cfg.list_config_dirs()
-    assert [c.label for c in out] == ["work", "clean"]  # recency: work(ts200) before clean(ts100)
+    # A base (`default`) entra sempre, na frente, mesmo deslogada; o resto por recência:
+    # work(ts200) antes de clean(ts100), e sem login ou sem projects/ ficam de fora.
+    assert [c.label for c in out] == ["default", "work", "clean"]
 
 
 def test_env_override_with_labels(tmp_path, monkeypatch):

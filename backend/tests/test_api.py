@@ -3174,9 +3174,9 @@ def test_pair_protocolo_completo_so_pro_novato(api_client):
         r = api_client.post("/api/sessions/d/pair", headers=_h(), json={"peers": ["a"], "task": ""})
     assert r.status_code == 200
     assert entregues["d"].startswith("[de: hangar] GRUPO DE TRABALHO ATIVO")
-    assert entregues["a"].startswith("[de: hangar] 'd' entrou no seu grupo")
-    assert entregues["b"].startswith("[de: hangar] 'd' entrou no seu grupo")
-    assert "Membros agora: 'a', 'b', 'd'" in entregues["a"]
+    assert entregues["a"].startswith("[de: hangar] 'd' (Claude Code) entrou no seu grupo")
+    assert entregues["b"].startswith("[de: hangar] 'd' (Claude Code) entrou no seu grupo")
+    assert "Membros agora: 'a' (Claude Code), 'b' (Claude Code), 'd' (Claude Code)" in entregues["a"]
 
 
 def test_pair_repetido_sem_mudanca_nao_avisa_ninguem(api_client):
@@ -3213,8 +3213,9 @@ def test_pair_merge_de_dois_grupos_avisa_entrada_dos_dois_lados(api_client):
          patch("app.api._deliver", side_effect=fake_deliver):
         r = api_client.post("/api/sessions/a/pair", headers=_h(), json={"peers": ["c"], "task": ""})
     assert r.status_code == 200
-    assert "'c', 'd' entrou" in entregues["a"] and "'c', 'd' entrou" in entregues["b"]
-    assert "'a', 'b' entrou" in entregues["c"] and "'a', 'b' entrou" in entregues["d"]
+    cd, ab = "'c' (Claude Code), 'd' (Claude Code) entrou", "'a' (Claude Code), 'b' (Claude Code) entrou"
+    assert cd in entregues["a"] and cd in entregues["b"]
+    assert ab in entregues["c"] and ab in entregues["d"]
 
 
 # ---------------------------------------------------------------------------
