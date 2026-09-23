@@ -318,6 +318,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_motor_sem_claude: () => m.erro_motor_sem_claude(),
   erro_conta_reconciliacao_falhou: (p) => m.erro_conta_reconciliacao_falhou({ nome_conta: String(p.nome_conta), erro: String(p.erro) }),
   erro_cwd_indisponivel: () => m.erro_cwd_indisponivel(),
+  erro_cwd_inexistente: (p) => m.erro_cwd_inexistente({ cwd: String(p.cwd) }),
   erro_arquivo_grande: () => m.erro_arquivo_grande(),
   erro_sem_plano_ativo: () => m.erro_sem_plano_ativo(),
   erro_sem_pasta_planos: () => m.erro_sem_pasta_planos(),
@@ -401,6 +402,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   // que carregar o nome dela e o caminho do dossie, senao quem le acha que nada aconteceu.
   erro_bastao_para_si_mesma: () => m.erro_bastao_para_si_mesma(),
   erro_bastao_sem_cwd: () => m.erro_bastao_sem_cwd(),
+  erro_bastao_cwd_inexistente: (p) => m.erro_bastao_cwd_inexistente({ cwd: String(p.cwd) }),
   erro_bastao_sem_dossie: () => m.erro_bastao_sem_dossie(),
   erro_bastao_gravar: (p) => m.erro_bastao_gravar({ motivo: String(p.motivo ?? '') }),
   erro_bastao_fila: (p) => m.erro_bastao_fila({ nome: String(p.nome), dossie: String(p.dossie) }),

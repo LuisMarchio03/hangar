@@ -690,6 +690,14 @@ export interface BastaoResult {
   aviso?: string | null;
 }
 
+// Passo em curso da criação de `name` (sessão nova ou sucessora do bastão); `step` null = nada em curso.
+export interface CreationProgress { step: string | null; params: Record<string, string> }
+
+export function getCreationProgress(name: string, server?: Server | null): Promise<CreationProgress> {
+  const path = `/api/sessions/creation-progress?name=${encodeURIComponent(name)}`;
+  return server ? apiFetchForServer(server, path) : apiFetch<CreationProgress>(path);
+}
+
 // Cria a sessão sucessora COM o dossiê: o backend monta → grava → cria → enfileira o kick-off.
 // Não é o POST /api/sessions normal; mandar aquele deixaria a sessão nova sem dossiê nenhum.
 export function passarBastao(

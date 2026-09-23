@@ -10,6 +10,7 @@
   import IconFolder from './icons/IconFolder.svelte';
   import { getSessions, listClaudeConfigs, getEngines, getProviders, criarConta, apagarConta,
            getArchivePorCwd, resumeArchivedConversation, getArchiveHistory, getBastao, passarBastao,
+           getCreationProgress, type CreationProgress,
            type ModelOption, type Motor, type ArchiveEntry } from '@hangar/core';
   import { carregarModelos as carregarModelosDaConta, temEscolhaDeModelo, valorModelo } from '../lib/modelosPorConta';
   import { basename, providerName, relativeTime, cotaDaConta, resumoCota } from '@hangar/core';
@@ -129,6 +130,42 @@
   let loading = $state(false);
   let contextBusy = $state(false);
   let error = $state('');
+  let passo = $state('');
+  let segundos = $state(0);
+
+  function rotuloPasso(p: CreationProgress): string {
+    switch (p.step) {
+      case 'preparando': return m.criar_passo_preparando();
+      case 'resumo': return m.criar_passo_resumo();
+      case 'resumo_modelo': return m.criar_passo_resumo_modelo();
+      case 'conta': return m.criar_passo_conta({ conta: p.params.conta ?? '' });
+      case 'criando': return m.criar_passo_criando();
+      case 'recado': return m.criar_passo_recado();
+      default: return '';
+    }
+  }
+
+  // Consulta o passo enquanto a criação espera; devolve quem para. O relógio anda mesmo sem
+  // resposta do backend: é ele que mostra que nada travou.
+  function acompanharCriacao(nomeSessao: string, server: Server | null): () => void {
+    const inicio = Date.now();
+    let vivo = true;
+    passo = '';
+    segundos = 0;
+    const relogio = setInterval(() => { segundos = Math.floor((Date.now() - inicio) / 1000); }, 1000);
+    (async () => {
+      while (vivo) {
+        try {
+          const p = await getCreationProgress(nomeSessao, server);
+          if (vivo) passo = rotuloPasso(p) || passo;
+        } catch {
+          // Consulta que falha só deixa o último passo na tela; a criação em si segue e reporta o erro dela.
+        }
+        await new Promise((r) => setTimeout(r, 800));
+      }
+    })();
+    return () => { vivo = false; clearInterval(relogio); passo = ''; segundos = 0; };
+  }
 
   // A MESMA regra do backend (`app/names.py:sanitize_session_name`): NFKD, descarta o acento,
   // troca o resto por `-` e apara as pontas. O NFKD vem ANTES do filtro pelo motivo escrito lá —
@@ -867,6 +904,7 @@
     error = '';
     const g = codexGeneration, server = codexServer, account = codexAccount;
     const baton = bastao;
+    const pararAcompanhamento = acompanharCriacao(name.trim(), provider === 'codex' ? server : null);
     const body = { name: name.trim(), cwd: picked, provider, codex_account: account,
       model: modelo || null, effort: esforco || null,
       // O Codex é criado por este corpo e retorna antes do `onCreate` lá embaixo: sem o `jev`
@@ -947,6 +985,7 @@
       if (body.provider === 'codex' && g !== codexGeneration) return;
       error = err instanceof Error ? err.message : m.criar_sessao_erro();
     } finally {
+      pararAcompanhamento();
       if (body.provider !== 'codex' || g === codexGeneration) loading = false;
     }
   }
@@ -1536,6 +1575,11 @@
           <button class="primary-btn" onclick={create} disabled={loading || contextBusy || codexUnavailable || !name.trim() || providersCarregando || bastaoSemServidor || (providers[provider] && !providers[provider].disponivel)}>
             {loading ? m.criar_criando() : (bastao ? m.bastao_acao() : m.sessao_nova())}
           </button>
+          {#if loading}
+            <p class="passo-criacao" role="status" aria-live="polite">
+              {m.criar_passo_tempo({ passo: passo || m.criar_criando(), segundos: String(segundos) })}
+            </p>
+          {/if}
         {/if}
         {#if !isDesktop}
           <!-- No desktop o painel da esquerda continua visível: trocar de pasta é clicar nela. -->
@@ -2157,6 +2201,13 @@
     font-size: var(--text-sm);
     color: var(--error);
     margin-bottom: var(--space-3);
+  }
+
+  .passo-criacao {
+    margin-top: var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    text-align: center;
   }
 
   .primary-btn {

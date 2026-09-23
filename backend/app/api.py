@@ -12,7 +12,7 @@ import threading
 import time
 import urllib.request
 from datetime import datetime
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Literal, Optional
@@ -1910,8 +1910,42 @@ def uso_endpoint(period: str = "all", conta: list[str] = Query([]), projeto: lis
         return _aquecendo(e)
 
 
+# Passo em curso de cada criação, pelo nome da sessão nova: a tela de criar consulta enquanto
+# espera, e quem olha sabe que não travou.
+_criacao_passo: dict[str, dict] = {}
+
+
+def _passo(nome: str, passo: str, **params) -> None:
+    _criacao_passo[sanitize_session_name(nome)] = {"step": passo, "params": params}
+
+
+@contextmanager
+def _acompanhar_criacao(nome: str):
+    """Só quem abriu o registro o apaga: o bastão chama o create_session por dentro e ainda tem
+    passo depois dele."""
+    chave = sanitize_session_name(nome)
+    dono = chave not in _criacao_passo
+    if dono:
+        _criacao_passo[chave] = {"step": "preparando", "params": {}}
+    try:
+        yield
+    finally:
+        if dono:
+            _criacao_passo.pop(chave, None)
+
+
+@app.get("/api/sessions/creation-progress", dependencies=[Depends(require_auth)])
+async def creation_progress(name: str):
+    return _criacao_passo.get(sanitize_session_name(name)) or {"step": None, "params": {}}
+
+
 @app.post("/api/sessions", dependencies=[Depends(require_auth)], response_model=SessionInfo)
 async def create_session(body: CreateBody):
+    with _acompanhar_criacao(body.name):
+        return await _criar_sessao(body)
+
+
+async def _criar_sessao(body: CreateBody):
     # Handler async por causa da trava de conta mais abaixo. Todo provider passa pelo MESMO
     # registry.create — o Codex tambem, desde que o lancador unico virou o comando do pane dele.
     # registry.create e SINCRONO e spawna um
@@ -1925,6 +1959,11 @@ async def create_session(body: CreateBody):
     # ser rejeitado aqui não pode ter reconciliado a conta (deriva movida, memória criada) à toa.
     if body.provider not in ("claude", "codex", "pi", "kimi", "omp"):
         raise HTTPException(400, detail=erro("erro_provider_sessao_invalido", "provider invalido"))
+    # Sem isto a sessão sem terminal nasce e só quebra ao subir o processo, com um ENOENT que não
+    # diz qual arquivo faltou.
+    if not await asyncio.to_thread(os.path.isdir, os.path.expanduser(body.cwd)):
+        raise HTTPException(400, detail=erro("erro_cwd_inexistente", f"a pasta {body.cwd} não existe",
+                                             cwd=body.cwd))
     if body.read_only:
         from app.orq_readonly import prepare
         try:
@@ -2072,6 +2111,7 @@ async def create_session(body: CreateBody):
         alvo = Path(body.config_dir)
         if contas.e_conta(alvo):
             nome_conta = alvo.name.removeprefix(".claude-")
+            _passo(body.name, "conta", conta=nome_conta)
             try:
                 # `ciclo_conta` numa thread pelo mesmo motivo do DELETE: o `flock` do __enter__
                 # bloqueia, e no event loop isso congelava o app inteiro quando duas operações de
@@ -2110,6 +2150,7 @@ async def create_session(body: CreateBody):
                             _kw["read_only"] = True
                         if body.headless:
                             _kw["headless"] = True
+                        _passo(body.name, "criando")
                         info = await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir, **_kw)
                         if body.headless:
                             # Hooks de SessionStart rodam enquanto a pessoa digita, não no 1º envio.
@@ -2143,6 +2184,7 @@ async def create_session(body: CreateBody):
             _kw2["read_only"] = True
         if body.headless:
             _kw2["headless"] = True
+        _passo(body.name, "criando")
         info = await _create_registry(_kw2)
         if body.headless and body.provider == "codex":
             # Aquece já: o app-server sobe e abre a thread agora, não no primeiro prompt.
@@ -2792,8 +2834,30 @@ def _nome_ocupado(nome: str) -> bool:
     return tmux.has_session(nome) or codex_sessions.exists(nome) or headless_sessions.exists(nome)
 
 
+def _cwd_do_processo(nome: str) -> str | None:
+    """Pasta onde o processo da sessão sem terminal está agora. Renomear a pasta com a sessão viva
+    não tira o processo dela, e o /proc mostra o nome novo; o registro guarda o de quando nasceu."""
+    from app.adapters.codex import sessions as codex_sessions
+    for meta in (headless_sessions.load(nome), codex_sessions.load(nome)):
+        pid = ((meta or {}).get("cano") or {}).get("pid")
+        chave = (meta or {}).get("key") or ""
+        if not pid or not chave:
+            continue
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                if chave[:16].encode() not in fh.read():
+                    continue   # pid reaproveitado por outro processo
+            cwd = os.readlink(f"/proc/{pid}/cwd")
+        except OSError:
+            continue
+        if os.path.isdir(cwd):
+            return cwd
+    return None
+
+
 def _bastao_preparar(info: SessionInfo, origem: str, destino: str,
                      por_modelo: bool = False) -> tuple[str, Path, str, str | None]:
+    _passo(destino, "resumo")
     """Monta o resumo, GRAVA e devolve (texto, caminho, kick-off, aviso). Tudo sync, numa thread só.
 
     Gravar antes de criar a sessão é o que fecha o caso "sessão nova viva apontando pra um arquivo
@@ -2822,6 +2886,7 @@ def _bastao_preparar(info: SessionInfo, origem: str, destino: str,
         if cfg is None:
             aviso = "só dá pra usar o modelo quando a sessão de origem é Claude nesta máquina"
         else:
+            _passo(destino, "resumo_modelo")
             texto, aviso = bastao_mod.reescrever_com_modelo(texto, cfg)
     alvo = bastao_mod.gravar(destino, texto)
     conta, modelo = bastao_mod.origem_resumida(info.jsonl, info.provider, info.codex_home)
@@ -2830,6 +2895,11 @@ def _bastao_preparar(info: SessionInfo, origem: str, destino: str,
 
 @app.post("/api/sessions/{name}/bastao", dependencies=[Depends(require_auth)])
 async def bastao_passar(name: str, body: BastaoBody):
+    with _acompanhar_criacao(body.name):
+        return await _passar_bastao(name, body)
+
+
+async def _passar_bastao(name: str, body: BastaoBody):
     """Passa o bastão de `{name}` pra uma sessão nova: dossiê no disco + sessão criada + kick-off
     na fila durável dela.
 
@@ -2901,6 +2971,17 @@ async def bastao_passar(name: str, body: BastaoBody):
         raise HTTPException(400, detail=erro("erro_bastao_sem_cwd",
                                              "a sessão de origem não tem diretório conhecido; "
                                              "escolha o cwd da sessão nova"))
+    # O registro guarda a pasta de quando a origem nasceu; renomeada depois, o processo vivo segue
+    # na pasta nova. Sem processo pra perguntar, recusa antes de gravar o dossiê.
+    if not await asyncio.to_thread(os.path.isdir, os.path.expanduser(cwd)) and not body.cwd:
+        vivo = await asyncio.to_thread(_cwd_do_processo, name)
+        if vivo:
+            _log.info("bastao: pasta de %s mudou de %s para %s; a sessão nova nasce na atual", name, cwd, vivo)
+            cwd = vivo
+    if not await asyncio.to_thread(os.path.isdir, os.path.expanduser(cwd)):
+        raise HTTPException(400, detail=erro("erro_bastao_cwd_inexistente",
+                                             f"a pasta {cwd} não existe mais; se ela foi renomeada "
+                                             f"ou movida, escolha a pasta nova", cwd=cwd))
     try:
         texto, alvo, kick, aviso_resumo = await asyncio.to_thread(
             _bastao_preparar, info, name, destino, body.resumo_por_modelo)
@@ -2924,6 +3005,7 @@ async def bastao_passar(name: str, body: BastaoBody):
         # `CreateBody.headless` é estrito: None (cliente antigo, que não manda o campo) tem de
         # virar False, e não chegar como None num campo que só aceita bool.
         headless=bool(body.headless)))
+    _passo(destino, "recado")
     try:
         await asyncio.to_thread(lambda: PromptQueue(novo.name).append(
             kick, delivered=False, pre_transcript=True))
