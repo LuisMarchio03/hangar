@@ -32,10 +32,10 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
-async function reqEm<T>(s: Server, path: string, init?: RequestInit): Promise<T> {
+async function reqEm<T>(s: Server, path: string, init?: RequestInit, prazoMs = 8000): Promise<T> {
   const res = await fetch(`${s.baseUrl}${path}`, {
     ...init,
-    signal: comTeto(init?.signal ?? undefined, 8000),
+    signal: comTeto(init?.signal ?? undefined, prazoMs),
     headers: {
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
       Authorization: `Bearer ${s.token}`,
@@ -45,8 +45,8 @@ async function reqEm<T>(s: Server, path: string, init?: RequestInit): Promise<T>
   return res.json();
 }
 
-function em<T>(alvo: Server | null, path: string, init?: RequestInit): Promise<T> {
-  return alvo ? reqEm<T>(alvo, path, init) : req<T>(path, init);
+function em<T>(alvo: Server | null, path: string, init?: RequestInit, prazoMs?: number): Promise<T> {
+  return alvo ? reqEm<T>(alvo, path, init, prazoMs) : req<T>(path, init);
 }
 
 export { codexOpcoes, type CodexOpcoes } from '@hangar/core';
@@ -179,6 +179,9 @@ export function consertarHarness(alvo: Server | null, conserto: string): Promise
 export interface ComputerControlTarget { name: string; path: string; transport: string; host: string }
 
 export interface ComputerControlState {
+  mode: 'package' | 'local';      // package = instalado pelo botão (uvx + release); local = pasta com o código
+  installed_tag: string;
+  package_exists: boolean;
   targets: ComputerControlTarget[];
   local_available: boolean;   // o servidor é Windows: "este computador" pode ser alvo
   enabled: boolean;
@@ -199,6 +202,7 @@ export interface ComputerControlState {
 
 export interface ComputerControlRequest {
   enabled: boolean;
+  mode?: 'package' | 'local';
   project_dir: string;
   agent_config: string;
   llm_url: string;
@@ -215,6 +219,11 @@ export function getComputerControl(target: Server | null): Promise<ComputerContr
 
 export function saveComputerControl(target: Server | null, request: ComputerControlRequest): Promise<ComputerControlState> {
   return em(target, '/api/computer-control', { method: 'PUT', body: JSON.stringify(request) });
+}
+
+// Baixa a release: pode levar mais que o teto padrão de 8 s de uma chamada a outro servidor.
+export function installComputerControl(target: Server | null): Promise<ComputerControlState> {
+  return em(target, '/api/computer-control/install', { method: 'POST' }, 180000);
 }
 
 export function createComputerControlTarget(target: Server | null, request: {

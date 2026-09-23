@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Server } from '../../lib/auth';
   import { getComputerControl, saveComputerControl, listComputerControlModels, createComputerControlTarget,
+    installComputerControl,
     type ComputerControlState, type ComputerControlTarget } from '../../lib/credenciais';
   import EscopoChip from './EscopoChip.svelte';
   import * as m from '../../paraglide/messages';
@@ -29,7 +30,24 @@
   const targetLabel = (t: ComputerControlTarget) =>
     `${t.name} · ${t.transport === 'local' ? m.computer_control_target_local() : t.host}`;
 
-  // Formulário de alvo novo: vira um <nome>-agent.json na pasta do projeto.
+  let installing = $state(false);
+  let installError = $state('');
+  async function install() {
+    if (installing) return;
+    installing = true;
+    installError = '';
+    savedMessage = '';
+    try {
+      fill(await installComputerControl(apiTarget));
+      savedMessage = m.computer_control_installed({ tag: current?.installed_tag ?? '' });
+    } catch (e) {
+      installError = e instanceof Error ? e.message : String(e);
+    } finally {
+      installing = false;
+    }
+  }
+
+  // Formulário de alvo novo: vira um <nome>-agent.json na pasta dos alvos.
   let showNewTarget = $state(false);
   let newName = $state('');
   let newTransport = $state<'ssh' | 'local'>('ssh');
@@ -116,6 +134,7 @@
     try {
       const s = await saveComputerControl(apiTarget, {
         enabled,
+        mode: current.mode,
         project_dir: projectDir.trim(),
         agent_config: agentConfig,
         llm_url: preset === 'cliproxy' ? current.cliproxy.preset_url : url.trim(),
@@ -153,6 +172,20 @@
   {:else if !current}
     <button type="button" class="action" onclick={load}>{m.lista_tentar_novamente()}</button>
   {:else}
+    <div class="install">
+      <p class="status">
+        {current.mode === 'package'
+          ? m.computer_control_mode_package({ tag: current.installed_tag })
+          : m.computer_control_mode_local({ dir: current.project_dir })}
+      </p>
+      <p class="hint">{current.mode === 'package' ? m.computer_control_mode_package_hint() : m.computer_control_mode_local_hint()}</p>
+      <button type="button" class="action" onclick={install} disabled={installing || saving} aria-busy={installing}>
+        {installing ? m.computer_control_installing()
+          : current.mode === 'package' ? m.computer_control_update() : m.computer_control_install()}
+      </button>
+      {#if installError}<p class="err" role="alert">{installError}</p>{/if}
+    </div>
+
     <!-- Chave em campo de texto mascarado por CSS, não type="password": com campo de senha no form o
          gerenciador do navegador ignora o autocomplete e enfia e-mail e senha salvos nos campos. -->
     <form onsubmit={save} autocomplete="off">
@@ -162,8 +195,10 @@
       </label>
       <p class="hint">{m.computer_control_enable_hint()}</p>
 
-      <label for="cc-dir">{m.computer_control_dir()}</label>
-      <input id="cc-dir" name="cc-dir" autocomplete="off" bind:value={projectDir} disabled={saving || !enabled} spellcheck="false" />
+      {#if current.mode === 'local'}
+        <label for="cc-dir">{m.computer_control_dir()}</label>
+        <input id="cc-dir" name="cc-dir" autocomplete="off" bind:value={projectDir} disabled={saving || !enabled} spellcheck="false" />
+      {/if}
 
       <label for="cc-agent">{m.computer_control_target()}</label>
       <div class="row">
@@ -313,6 +348,11 @@
   .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button:disabled { opacity: .6; cursor: default; }
   .presets { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+  .install {
+    display: flex; flex-direction: column; gap: var(--space-1);
+    padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+  }
+  .install .action { margin-top: var(--space-2); }
   .new-target {
     display: flex; flex-direction: column; gap: var(--space-2);
     padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);

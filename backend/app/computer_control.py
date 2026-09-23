@@ -18,8 +18,21 @@ from app import atomico
 from app.config import list_config_dirs
 
 NAME = "hangar-computer-control"
+REPO = "jeffer1312/hangar-computer-control"
 PRESET_URL = "http://127.0.0.1:8317/v1/chat/completions"
 EFFORTS = ("", "low", "medium", "high")
+
+
+def _install_dir() -> Path:
+    return Path.home() / ".hangar" / "computer-control"
+
+
+def _package_targets() -> Path:
+    return _install_dir() / "targets"
+
+
+def _package_exe() -> Path:
+    return _install_dir() / "windows-agent.exe"
 
 
 class ComputerControlError(Exception):
@@ -154,10 +167,28 @@ def _targets(project: Path) -> list[dict]:
     return out
 
 
+def _mode(entry: dict | None) -> str:
+    """`package` = instalado pelo botão (uvx + release); `local` = rodando de uma pasta com o código."""
+    return "package" if entry and Path(str(entry.get("command", ""))).name in ("uvx", "uvx.exe") else "local"
+
+
+def _local_project(entry: dict | None) -> Path:
+    args = (entry or {}).get("args") or []
+    return Path(args[0]).parent if args and _mode(entry) == "local" else Path.home() / "Projetos" / NAME
+
+
+def _where_targets(entry: dict | None, project_dir: str = "") -> tuple[Path, Path]:
+    """(pasta dos *-agent.json, windows-agent.exe) conforme o modo."""
+    if _mode(entry) == "package":
+        return _package_targets(), _package_exe()
+    project = Path(project_dir).expanduser() if project_dir else _local_project(entry)
+    return project, project / "dist" / "windows-agent.exe"
+
+
 def create_target(body: dict) -> dict:
-    """Cria `<nome>-agent.json` na pasta do projeto. SSH aponta pra um Windows na rede; local é o
+    """Cria `<nome>-agent.json` na pasta dos alvos. SSH aponta pra um Windows na rede; local é o
     próprio Windows onde este Hangar roda."""
-    project = Path(str(body.get("project_dir") or "").strip()).expanduser()
+    project, agent_exe = _where_targets(_known_entry(), str(body.get("project_dir") or "").strip())
     if not project.is_dir():
         raise ComputerControlError(400, "erro_computer_control_dir",
                                    f"{project} não tem servidor_mcp.py e .venv/bin/python", dir=str(project))
@@ -169,7 +200,6 @@ def create_target(body: dict) -> dict:
     if path.exists():
         raise ComputerControlError(409, "erro_computer_control_target_exists", f"o alvo {name} já existe",
                                    name=name)
-    agent_exe = project / "dist" / "windows-agent.exe"
     cfg: dict
     if body.get("transport") == "local":
         if os.name != "nt":
@@ -198,15 +228,18 @@ def state() -> dict:
     enabled = _entry(_main_file()) is not None
     entry = _known_entry()
     env = (entry or {}).get("env") or {}
-    args = (entry or {}).get("args") or []
-    project = str(Path(args[0]).parent) if args else str(Path.home() / "Projetos" / NAME)
+    project = str(_local_project(entry))
     llm_key = env.get("LLM_PROXY_KEY", "")
     jev = env.get("TYPESAFE_API_KEY", "")
     jev_settings = _jev_from_settings()
     cliproxy = _cliproxy_keys()
-    targets = _targets(Path(project))
+    targets = _targets(_where_targets(entry)[0])
     agents = [t["path"] for t in targets]
+    install = _read(_install_dir() / "install.json")
     return {
+        "mode": _mode(entry),
+        "installed_tag": install.get("tag", ""),
+        "package_exists": bool(install.get("tag")) and _package_exe().is_file(),
         "targets": targets,
         "local_available": os.name == "nt",
         "enabled": enabled,
@@ -244,11 +277,22 @@ def save(body: dict) -> dict:
                 _write(p, data)
         return state()
 
-    project = Path(str(body.get("project_dir") or "").strip()).expanduser()
-    python = _venv_python(project)
-    if not (project / "servidor_mcp.py").is_file() or not python.exists():
-        raise ComputerControlError(400, "erro_computer_control_dir",
-                                   f"{project} não tem servidor_mcp.py e .venv/bin/python", dir=str(project))
+    if (body.get("mode") or _mode(_known_entry())) == "package":
+        install = _read(_install_dir() / "install.json")
+        if not install.get("tag") or not _package_exe().is_file():
+            raise ComputerControlError(400, "erro_computer_control_not_installed",
+                                       "instale a versão publicada antes de usar esse modo")
+        command = install["uvx"]
+        args = ["--from", f"git+https://github.com/{REPO}@{install['tag']}", NAME]
+        agents_dir, pythonpath = _package_targets(), ""
+    else:
+        project = Path(str(body.get("project_dir") or "").strip()).expanduser()
+        python = _venv_python(project)
+        if not (project / "servidor_mcp.py").is_file() or not python.exists():
+            raise ComputerControlError(400, "erro_computer_control_dir",
+                                       f"{project} não tem servidor_mcp.py e .venv/bin/python", dir=str(project))
+        command, args = str(python), [str(project / "servidor_mcp.py")]
+        agents_dir, pythonpath = project, str(project)
     agent = str(body.get("agent_config") or "").strip()
     if not Path(agent).is_file():
         raise ComputerControlError(400, "erro_computer_control_agent", f"o arquivo {agent} não existe", file=agent)
@@ -272,7 +316,7 @@ def save(body: dict) -> dict:
     jev = str(body.get("jev_key") or "") or previous.get("TYPESAFE_API_KEY", "") or _jev_from_settings()
 
     # HCC_AGENT_CONFIG é o alvo padrão; HCC_AGENTS_DIR, a pasta de onde o MCP tira os outros.
-    managed = {"PYTHONPATH": str(project), "HCC_AGENT_CONFIG": agent, "HCC_AGENTS_DIR": str(project),
+    managed = {"PYTHONPATH": pythonpath, "HCC_AGENT_CONFIG": agent, "HCC_AGENTS_DIR": str(agents_dir),
                "LLM_PROXY_URL": url,
                "LLM_MODEL": str(body.get("llm_model") or "").strip(), "LLM_EFFORT": effort,
                "LLM_PROXY_KEY": llm_key, "TYPESAFE_API_KEY": jev}
@@ -280,7 +324,7 @@ def save(body: dict) -> dict:
     # impede herdar o venv do processo que abre a sessão). Das variáveis desta tela, vazia = ausente.
     env = {k: v for k, v in previous.items() if k not in managed}
     env.update({k: v for k, v in managed.items() if v})
-    entry = {"command": str(python), "args": [str(project / "servidor_mcp.py")], "env": env}
+    entry = {"command": command, "args": args, "env": env}
     for p in files:
         data = _read(p)
         if not data and p != _main_file():
@@ -292,6 +336,76 @@ def save(body: dict) -> dict:
         data["mcpServers"] = {**servers, NAME: entry}
         _write(p, data)
     return state()
+
+
+def _get(url: str, timeout: int) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": "hangar", "Accept": "application/vnd.github+json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read()
+    except urllib.error.HTTPError as e:
+        raise ComputerControlError(502, "erro_computer_control_release", f"o GitHub respondeu {e.code} em {url}",
+                                   error=f"HTTP {e.code}")
+    except (urllib.error.URLError, OSError) as e:
+        raise ComputerControlError(502, "erro_computer_control_release", f"não consegui baixar {url}: {e}",
+                                   error=str(e))
+
+
+def _migrated(cfg: dict, exe: Path) -> dict:
+    """O alvo trazido da pasta local passa a usar o windows-agent.exe baixado."""
+    if cfg.get("transport") == "ssh" and str(cfg.get("agent_path", "")).endswith("windows-agent.exe"):
+        return {**cfg, "agent_path": str(exe)}
+    command = cfg.get("command")
+    if cfg.get("transport") == "local" and isinstance(command, list) and command \
+            and str(command[0]).endswith("windows-agent.exe"):
+        return {**cfg, "command": [str(exe), *command[1:]]}
+    return cfg
+
+
+def install() -> dict:
+    """Instala (ou atualiza) a última versão publicada: baixa o windows-agent.exe da release, traz
+    os alvos da pasta local e passa a entrada pra `uvx --from git+…@tag`. Nada da pasta local é
+    apagado: voltar pro modo local é só salvar com a pasta."""
+    uvx = shutil.which("uvx")
+    if not uvx:
+        raise ComputerControlError(400, "erro_computer_control_no_uvx",
+                                   "o uvx não está no PATH deste servidor (vem com o uv)")
+    try:
+        tag = json.loads(_get(f"https://api.github.com/repos/{REPO}/releases/latest", 15))["tag_name"]
+    except (ValueError, KeyError, TypeError):
+        raise ComputerControlError(502, "erro_computer_control_release", "a release mais recente veio sem tag",
+                                   error="sem tag_name")
+    exe = _package_exe()
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    tmp = exe.with_name(f"{exe.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}")
+    tmp.write_bytes(_get(f"https://github.com/{REPO}/releases/download/{tag}/windows-agent.exe", 120))
+    atomico.substituir(tmp, exe)
+
+    before = _known_entry()
+    targets = _package_targets()
+    targets.mkdir(parents=True, exist_ok=True)
+    if _mode(before) == "local":
+        for p in _local_project(before).glob("*-agent.json"):
+            dest = targets / p.name
+            if dest.exists():
+                continue
+            try:
+                cfg = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(cfg, dict):
+                dest.write_text(json.dumps(_migrated(cfg, exe), indent=2) + "\n", encoding="utf-8")
+    _write(_install_dir() / "install.json", {"tag": tag, "uvx": uvx})
+
+    s = state()
+    default = Path(s["agent_config"]).name if s["agent_config"] else ""
+    agent = targets / default if default and (targets / default).is_file() else None
+    agent = agent or next(iter(sorted(targets.glob("*-agent.json"))), None)
+    if agent is None:
+        return s   # sem alvo ainda: a tela pede pra criar um antes de ligar
+    return save({"enabled": True, "mode": "package", "agent_config": str(agent), "llm_url": s["llm_url"],
+                 "llm_model": s["llm_model"], "llm_effort": s["llm_effort"], "llm_key": None, "jev_key": None,
+                 "use_cliproxy_key": s["cliproxy"]["key_is_cliproxy"]})
 
 
 def list_models(url: str, key: str | None, use_saved_key: bool, use_cliproxy_key: bool) -> list[str]:

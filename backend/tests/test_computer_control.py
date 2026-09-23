@@ -73,6 +73,31 @@ def test_cria_alvo_ssh_e_recusa_repetido_e_local_fora_do_windows(home, monkeypat
     assert e.value.code == "erro_computer_control_local_only_windows"
 
 
+def test_instalar_versao_publicada_leva_alvos_e_troca_pra_uvx(home, monkeypatch):
+    projeto = home / "Projetos" / cc.NAME
+    (projeto / "alvo-agent.json").write_text(json.dumps(
+        {"transport": "ssh", "host": "h", "agent_path": str(projeto / "dist" / "windows-agent.exe")}))
+    cc.save(_pedido(home))
+
+    def falso_get(url, timeout):
+        return json.dumps({"tag_name": "v0.1.0"}).encode() if "api.github.com" in url else b"MZ-exe"
+    monkeypatch.setattr(cc, "_get", falso_get)
+    monkeypatch.setattr(cc.shutil, "which", lambda n: "/usr/bin/uvx" if n == "uvx" else None)
+
+    estado = cc.install()
+    entrada = _entrada(home / ".claude-x" / ".claude.json")
+    assert entrada["command"] == "/usr/bin/uvx"
+    assert entrada["args"] == ["--from", f"git+https://github.com/{cc.REPO}@v0.1.0", cc.NAME]
+    alvos = home / ".hangar" / "computer-control" / "targets"
+    assert entrada["env"]["HCC_AGENTS_DIR"] == str(alvos)
+    assert entrada["env"]["HCC_AGENT_CONFIG"] == str(alvos / "alvo-agent.json")
+    assert "PYTHONPATH" not in entrada["env"] and entrada["env"]["LLM_MODEL"] == "m1"
+    assert json.loads((alvos / "alvo-agent.json").read_text())["agent_path"] == str(
+        home / ".hangar" / "computer-control" / "windows-agent.exe")
+    assert (projeto / "alvo-agent.json").is_file()   # a pasta local não é apagada
+    assert estado["mode"] == "package" and estado["installed_tag"] == "v0.1.0"
+
+
 def test_preserva_variavel_que_a_tela_nao_controla(home):
     principal = home / ".claude.json"
     cc.save(_pedido(home))

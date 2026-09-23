@@ -6448,6 +6448,7 @@ def resume_archived(project: str, session_id: str, body: ResumeArchivedBody = Re
 # ── MCP hangar-computer-control: liga/desliga e configura nos .claude.json de todas as contas ──
 class ComputerControlBody(_StrictBody):
     enabled: bool
+    mode: Literal["package", "local"] | None = None   # None = mantém o modo atual
     project_dir: str = ""
     agent_config: str = ""
     llm_url: str = ""
@@ -6492,6 +6493,12 @@ class ComputerControlTargetBody(_StrictBody):
     host: str = ""
     proxy_command: str = ""
     request_timeout: int | None = Field(default=None, ge=1, le=600)
+
+
+@app.post("/api/computer-control/install", dependencies=[Depends(require_auth)])
+def computer_control_install():
+    from app import computer_control as cc
+    return _computer_control_call(cc.install)
 
 
 @app.post("/api/computer-control/targets", dependencies=[Depends(require_auth)])
