@@ -2655,7 +2655,10 @@
       async (s) => cache.get(s.id) ?? (await getIdentificador(s)).identificador);
     if (window.location.hash !== hashDoClique) return;
     if (!destino) { mostrarAviso(m.user_remetente_fora_do_aparelho({ n: from })); return; }
-    if (destino.serverId && !selectServer(destino.serverId)) return;
+    if (destino.serverId && !selectServer(destino.serverId)) {
+      mostrarAviso(m.user_remetente_fora_do_aparelho({ n: from }));   // removido durante a busca
+      return;
+    }
     onNavigateToChat(destino.name);
   }
 

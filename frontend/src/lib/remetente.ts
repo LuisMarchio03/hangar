@@ -17,8 +17,12 @@ export async function destinoDoRemetente(
   if (i < 0) return { serverId: null, name: from };
   const id = from.slice(0, i);
   const name = from.slice(i + 2);
-  // Servidor fora do ar não responde o identificador; não é ele, e não derruba os outros.
-  const ids = await Promise.all(servers.map((s) => identificadorDe(s).catch(() => '')));
+  // Servidor que não responde o identificador (fora do ar, token recusado) não é candidato e não
+  // derruba os outros; o aviso fica no console pra um token quebrado não parecer "fora do aparelho".
+  const ids = await Promise.all(servers.map((s) => identificadorDe(s).catch((e: unknown) => {
+    console.warn('[remetente] identificador falhou', s.id, e);
+    return '';
+  })));
   const achados = servers.filter((_, k) => ids[k] === id);
   const dono = achados.find((s) => s.id === ativo) ?? achados[0];
   return dono ? { serverId: dono.id, name } : null;
