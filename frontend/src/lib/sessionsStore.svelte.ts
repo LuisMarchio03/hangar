@@ -311,10 +311,22 @@ function createSessionsStore() {
     recompute();
   }
 
-  // Wake do aparelho (iOS congela timers em background): zera o backoff e reconecta os caidos NA
-  // HORA — sem isto, o retry agendado pre-sleep deixava a lista "offline" por ate 60s com rede boa.
+  // Quem tinha lista válida quando o app foi pro segundo plano. A suspensão do iOS mata o socket e a
+  // volta registra isso como queda, com prazo persistido; pra quem estava no ar é artefato do
+  // aparelho, e esse prazo não pode segurar a reconexão (celular mostrava tudo offline por minutos).
+  let vivosAoEsconder = new Set<string>();
+
+  // Wake do aparelho (iOS congela timers em background): zera o prazo de quem estava no ar e
+  // reconecta NA HORA. Quem já estava caído antes de esconder segue esperando o prazo dele.
   function onVisibleKick() {
-    if (leavingPage || document.visibilityState !== 'visible' || refs === 0) return;
+    if (leavingPage || refs === 0) return;
+    if (document.visibilityState === 'hidden') {
+      vivosAoEsconder = new Set([...slots].filter(([id, slot]) => streams.has(id) && slot.sessions && !slot.error).map(([id]) => id));
+      return;
+    }
+    if (document.visibilityState !== 'visible') return;
+    for (const id of vivosAoEsconder) retentarAgora(id);
+    vivosAoEsconder = new Set();
     // Stream ZUMBI: o iOS suspende o PWA, o socket morre sem `onerror` e o EventSource continua no
     // mapa — como o `connect` só abre quem NÃO tem stream, ninguém o reabria, e o watchdog que
     // pegaria isso não roda em segundo plano. O app ficava mudo com a rede perfeita até a pessoa

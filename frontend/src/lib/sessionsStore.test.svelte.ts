@@ -163,6 +163,27 @@ it.each(['vpn', undefined])('buscarAgora(%s) reabre o produtor com erro sem inte
   expect(sessionsStore.rows.some(s => s.name === 'recovered')).toBe(true);
 });
 
+it('voltar do segundo plano reconecta na hora quem estava no ar; quem já caíra espera o prazo', () => {
+  vi.useFakeTimers();
+  sessionsStore.retain();
+  streams.get('lan')!.get('sessions')!({ data: '[]' });
+  objetos.get('vpn')!.onerror!();   // já estava caído antes de esconder
+  const vpnCaido = objetos.get('vpn');
+  const visibilidade = vi.spyOn(document, 'visibilityState', 'get');
+  visibilidade.mockReturnValue('hidden');
+  document.dispatchEvent(new Event('visibilitychange'));
+  const lanAntigo = objetos.get('lan');
+  lanAntigo!.onerror!();            // a suspensão matou o socket
+  expect(estaDesligado('lan')).toBe(true);
+  visibilidade.mockReturnValue('visible');
+  document.dispatchEvent(new Event('visibilitychange'));
+  expect(estaDesligado('lan')).toBe(false);
+  expect(objetos.get('lan')).not.toBe(lanAntigo);
+  expect(estaDesligado('vpn')).toBe(true);
+  expect(objetos.get('vpn')).toBe(vpnCaido);
+  visibilidade.mockRestore();
+});
+
 it('retoma automaticamente após o prazo, mantendo offline até uma resposta válida', () => {
   vi.useFakeTimers();
   sessionsStore.retain();
