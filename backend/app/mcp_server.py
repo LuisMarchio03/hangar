@@ -111,6 +111,10 @@ async def send(ctx: Context, alvo: str, texto: str, tmux: bool = False) -> dict[
     if alvo == eu or (settings.server_id and alvo == f"{settings.server_id}::{eu}"):
         raise ToolError(f"recusado: '{alvo}' é esta sessão — o recado voltaria pra você. "
                         "Quem é quem: tool `sessoes` (campo `voce`).")
+    # Modelo que escreve "[de: eu] …" por conta própria não ganha o prefixo em dobro — com ou sem o
+    # "<servidor>::" na frente, que é como o envio pra outro servidor qualifica o remetente.
+    texto = re.sub(rf"^\s*\[de:\s*(?:{re.escape(settings.server_id or '')}::)?{re.escape(eu)}\]\s*",
+                   "", texto)
     if peers.is_remote(alvo):
         srv, sess = peers.split_addr(alvo)
         if not settings.server_id:
@@ -123,8 +127,6 @@ async def send(ctx: Context, alvo: str, texto: str, tmux: bool = False) -> dict[
         return {"alvo": alvo, **(resp or {})}
     # `tmux` fica aceito por compatibilidade: o backend já escolhe o transporte (socket nativo,
     # plugin, tmux, fila) e nunca devolve o envio pro modelo fazer por outra ferramenta.
-    # Modelo que escreve "[de: eu] …" por conta própria não ganha o prefixo em dobro.
-    texto = re.sub(rf"^\s*\[de:\s*{re.escape(eu)}\]\s*", "", texto)
     try:
         resp = await api.input_prompt(alvo, api.InputBody(text=f"[de: {eu}] {texto}", steer=True))
     except HTTPException as e:

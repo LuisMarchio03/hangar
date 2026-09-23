@@ -507,6 +507,7 @@ fi
 # modelo: este script só entrega e diz o que aconteceu. `--tmux` fica aceito por compatibilidade.
 
 sender=$(me)
+curto="$sender"
 sess="$target"
 if [[ "$target" == *::* ]]; then
     # Destino em OUTRO servidor: resolve base/token no peers.json e qualifica o remetente —
@@ -521,8 +522,10 @@ if [[ "$target" == *::* ]]; then
     AUTH="Authorization: Bearer $rtok"
     sender="${SERVER_ID}::${sender}"
 fi
-# Modelo que escreve "[de: eu] …" por conta própria não ganha o prefixo em dobro.
-msg="$*"; msg="${msg#"[de: $sender] "}"; msg="${msg#"[de: $sender]"}"
+# Modelo que escreve "[de: eu] …" por conta própria não ganha o prefixo em dobro — nem com o nome
+# curto num envio pra outro servidor, onde o remetente já virou "<servidor>::<eu>".
+msg="$*"
+for p in "$sender" "$curto"; do msg="${msg#"[de: $p] "}"; msg="${msg#"[de: $p]"}"; done
 text="[de: $sender] $msg"
 
 body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1], "steer": True}))' "$text")
