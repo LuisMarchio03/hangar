@@ -317,11 +317,13 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   "sem identificador" separa token recusado, máquina fora do ar e nome vazio — este último com
   campo no detalhe de qualquer servidor com token aqui.
 - **Servidor que não responde sai da lista de sessões e volta a ser procurado automaticamente**:
-  espera de 30 s, 1 min, 2 min, 4 min, 5 min, 10 min e depois 30 min, mantendo esse teto.
+  espera de 2 s, 5 s, 30 s, 1 min, 2 min, 4 min, 5 min, 10 min e depois 30 min, mantendo esse
+  teto. A primeira queda NUNCA espera 30 s: backend reiniciando volta em segundos. O servidor
+  ativo e o que serve a página nunca recebem prazo: tentam em 1, 2, 4, 8, 16 e 30 s.
   Prazo e contagem são persistidos para sobreviver à recarga.
   Só uma resposta confirma a recuperação; expirar o prazo apenas permite nova tentativa.
   Erro HTTP e cancelamento da página não são queda de rede. Reconectar permite tentar antes.
-  Quem respondeu nas últimas 24 h não escala (fica em 30 s) e é tentado na hora quando o app
+  Quem respondeu nas últimas 24 h para em 30 s (2 s, 5 s, 30 s…) e é tentado na hora quando o app
   abre ou volta a ficar visível: a queda dele é a suspensão do aparelho, não a máquina.
   Falha com o app em segundo plano não conta (nem marca nem grava prazo): tenta a cada 30 s
   fixos e reconecta todos na volta.

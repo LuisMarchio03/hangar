@@ -36,7 +36,7 @@ describe('servidor desligado', () => {
 
   it('prazo cresce até trinta minutos, sem confundir prazo vencido com resposta', () => {
     vi.useFakeTimers();
-    for (const delay of [30000, 60000, 120000, 240000, 300000, 600000, 1800000, 1800000]) {
+    for (const delay of [2000, 5000, 30000, 60000, 120000, 240000, 300000, 600000, 1800000, 1800000]) {
       registrarFalha('pc');
       expect(retryAfterMs('pc')).toBe(delay);
       vi.advanceTimersByTime(1000);
@@ -48,16 +48,16 @@ describe('servidor desligado', () => {
     }
     registrarSucesso('pc');
     registrarFalha('pc');
-    expect(retryAfterMs('pc')).toBe(30000);
+    expect(retryAfterMs('pc')).toBe(2000);
   });
 
-  it('quem respondeu nas últimas 24 h não escala; passado isso, a escala volta', () => {
+  it('quem respondeu nas últimas 24 h para em 30 s; passado isso, a escala volta', () => {
     vi.useFakeTimers();
     registrarSucesso('pc');
-    for (let i = 0; i < 3; i++) {
+    for (const delay of [2000, 5000, 30000, 30000, 30000]) {
       registrarFalha('pc');
-      expect(retryAfterMs('pc')).toBe(30000);
-      vi.advanceTimersByTime(30000);
+      expect(retryAfterMs('pc')).toBe(delay);
+      vi.advanceTimersByTime(delay);
     }
     vi.advanceTimersByTime(24 * 60 * 60_000);
     registrarFalha('pc');

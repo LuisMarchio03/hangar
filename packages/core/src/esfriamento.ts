@@ -5,10 +5,13 @@ const CHAVE = 'hangar_servidores_desligados';
 const CHAVE_RESPOSTAS = 'hangar_servidores_responderam';
 
 type Estado = { failures: number; retryAt: number };
-const RETRY_DELAYS_MS = [30_000, 60_000, 120_000, 240_000, 300_000, 600_000, 1_800_000];
+// As duas primeiras esperas são curtas: queda isolada (backend reiniciando) volta em segundos,
+// e só quem falha três vezes seguidas passa a esperar de verdade.
+const RETRY_DELAYS_MS = [2_000, 5_000, 30_000, 60_000, 120_000, 240_000, 300_000, 600_000, 1_800_000];
 // Máquina que respondeu há menos disto está ligada: a falha dela vem do aparelho (o iOS mata o
-// socket na suspensão, a VPN demora a acordar), então a espera não escala.
+// socket na suspensão, a VPN demora a acordar), então a espera para em 30 s.
 const RESPONDEU_RECENTE_MS = 24 * 60 * 60_000;
+const TETO_RECENTE = RETRY_DELAYS_MS.indexOf(30_000) + 1;
 
 const estados = new Map<string, Estado>();
 const respostas = new Map<string, number>();
@@ -159,8 +162,8 @@ export function respondeuRecentemente(id: string): boolean {
 export function registrarFalha(id: string): void {
   carregar();
   if (protegido(id) || retryAfterMs(id) > 0) return;
-  const failures = respondeuRecentemente(id) ? 1
-    : Math.min((estados.get(id)?.failures ?? 0) + 1, RETRY_DELAYS_MS.length);
+  const teto = respondeuRecentemente(id) ? TETO_RECENTE : RETRY_DELAYS_MS.length;
+  const failures = Math.min((estados.get(id)?.failures ?? 0) + 1, teto);
   estados.set(id, { failures, retryAt: Date.now() + RETRY_DELAYS_MS[failures - 1] });
   gravar();
 }

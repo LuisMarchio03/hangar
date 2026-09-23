@@ -321,8 +321,8 @@ it('registra primeiro quadro, parse inválido, silêncio e volta sem copiar quad
   expect(estaDesligado('lan')).toBe(false);
   await vi.advanceTimersByTimeAsync(25000);
   expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ codigo: 'silencio', espera_ms: 25000 }), 'http://lan');
-  expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'lista.retentativa', espera_ms: 30000 }), 'http://lan');
-  await vi.advanceTimersByTimeAsync(30000);
+  expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'lista.retentativa', espera_ms: 2000 }), 'http://lan');
+  await vi.advanceTimersByTimeAsync(2000);
   publicar('[]');
   expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'lista.voltou' }), 'http://lan');
   expect(JSON.stringify(registrar.mock.calls.map(([e]) => e))).not.toMatch(/segredo|conversa|token|http:/);

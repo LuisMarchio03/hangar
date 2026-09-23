@@ -452,6 +452,21 @@ O estado de segundo plano vem do evento `visibilitychange`, não do `document.vi
 o erro da suspensão chega antes do evento da volta, e só o evento garante que ele ainda cai como
 segundo plano.
 
+Ainda em 23/09/2026 a primeira espera de 30 s virou o problema: com o backend local reiniciando
+(ou uma queda de um instante com a máquina no ar), a lista marcava a máquina em que a pessoa
+estava como offline e só voltava 30 s depois, ou com Ctrl+Shift+R. Recarregar com o backend ainda
+subindo gravava a mesma marca de novo. O usuário pediu que a primeira falha não espere. A escala
+agora começa em 2 s e 5 s, e só a terceira falha seguida chega aos 30 s; quem respondeu nas
+últimas 24 h sobe 2 s → 5 s → 30 s e para aí. Máquina desligada de verdade paga duas tentativas a
+mais antes de esfriar, o que não pesa na VPN do iPhone (o problema lá eram 13–24 por minuto).
+
+Só a escala não resolveu o restart: medido com `systemctl --user restart`, o backend levou 10 s
+para parar e mais 4 s para subir, as três tentativas (2 s, 5 s) caíram dentro desses 14 s e a
+máquina ficou offline 23 s DEPOIS de voltar. Por isso volta a proteção que existia antes de
+22/09 (e que aquela data tinha tirado do servidor ativo): o servidor ativo e o dono da URL da
+página nunca recebem a marca, e tentam de novo em 1, 2, 4, 8, 16 s até o teto de 30 s, em memória.
+Marca antiga gravada para eles é apagada ao conectar.
+
 **O custo real não era bateria, era a VPN do iPhone.** Com o cabo USB e o `idevicesyslog`, o log de
 dentro do aparelho mostrou a mesma varredura acontecendo na extensão de rede do Tailscale
 (`IPNExtension`), a 13–24 tentativas por minuto, cada uma um `open-conn-track: timeout opening ...

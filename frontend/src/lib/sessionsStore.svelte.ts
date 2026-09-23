@@ -8,7 +8,7 @@
 import * as m from '../paraglide/messages';
 import type { EventSourceLike } from '@hangar/core';
 import { openSessionsStream, registrarDiag, novoReqDiag } from '@hangar/core';
-import { listServers, onServersChanged, type Server } from './auth';
+import { getActiveId, listServers, onServersChanged, type Server } from './auth';
 import { navPelaLista } from './navPelaLista';
 import { getIdentificador } from './peers';
 import { ouvirFechamentoNav, podarNavMortos } from './navegadorPanel.svelte';
@@ -54,7 +54,18 @@ function createSessionsStore() {
   // desmontada (conversa aberta no celular).
   let emSegundoPlano = globalThis.document?.visibilityState === 'hidden';
   globalThis.document?.addEventListener('visibilitychange', () => { emSegundoPlano = document.visibilityState === 'hidden'; });
-  definirProtegido(() => leavingPage || emSegundoPlano);
+  /** O ativo e o dono da URL desta página nunca esperam o prazo: é a máquina que a pessoa está
+   *  usando, e um restart do backend não pode deixá-la offline depois que ele já voltou. */
+  function intocavel(id: string): boolean {
+    if (id === getActiveId()) return true;
+    const s = servers.find((x) => x.id === id);
+    try {
+      return !!s?.baseUrl && new URL(s.baseUrl).origin === globalThis.location?.origin;
+    } catch {
+      return false;
+    }
+  }
+  definirProtegido((id) => leavingPage || emSegundoPlano || intocavel(id));
   // O core não toca DOM: o `localStorage` (que faz a marca sobreviver ao recarregamento do PWA)
   // entra por aqui. Indisponível (modo privado), fica só em memória — o core avisa no diário.
   try {
@@ -67,7 +78,9 @@ function createSessionsStore() {
   function scheduleRetry(id: string) {
     if (leavingPage || refs === 0) return;
     // Em segundo plano não há prazo gravado, mas também não pode martelar máquina desligada.
-    const delay = Math.max(emSegundoPlano ? 30_000 : 1000, retryAfterMs(id));
+    const piso = emSegundoPlano ? 30_000
+      : intocavel(id) ? Math.min(30_000, 1000 * 2 ** ((tentativas.get(id) ?? 1) - 1)) : 1000;
+    const delay = Math.max(piso, retryAfterMs(id));
     const servidor = servers.find((s) => s.id === id);
     if (servidor) registrarDiag({ evento: 'lista.retentativa', tela: 'lista',
       espera_ms: delay, tentativa: tentativas.get(id) ?? 1 }, servidor.baseUrl);
@@ -120,6 +133,7 @@ function createSessionsStore() {
     for (const s of list) {
       if (onlyId !== undefined && s.id !== onlyId) continue;
       if (streams.has(s.id)) continue;
+      if (intocavel(s.id) && estaDesligado(s.id)) retentarAgora(s.id);
       if (retryAfterMs(s.id) > 0) {
         slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
         scheduleRetry(s.id);
