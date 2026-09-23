@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Server } from '../../lib/auth';
-  import { getComputerControl, saveComputerControl, listComputerControlModels,
-    type ComputerControlState } from '../../lib/credenciais';
+  import { getComputerControl, saveComputerControl, listComputerControlModels, createComputerControlTarget,
+    type ComputerControlState, type ComputerControlTarget } from '../../lib/credenciais';
   import EscopoChip from './EscopoChip.svelte';
   import * as m from '../../paraglide/messages';
 
@@ -26,7 +26,41 @@
   let loadingModels = $state(false);
   let modelsError = $state('');
 
-  const fileName = (p: string) => p.split('/').pop() ?? p;
+  const targetLabel = (t: ComputerControlTarget) =>
+    `${t.name} · ${t.transport === 'local' ? m.computer_control_target_local() : t.host}`;
+
+  // Formulário de alvo novo: vira um <nome>-agent.json na pasta do projeto.
+  let showNewTarget = $state(false);
+  let newName = $state('');
+  let newTransport = $state<'ssh' | 'local'>('ssh');
+  let newHost = $state('');
+  let newProxy = $state('');
+  let newTimeout = $state('');
+  let creating = $state(false);
+  let newTargetError = $state('');
+
+  async function createTarget() {
+    if (creating) return;
+    creating = true;
+    newTargetError = '';
+    try {
+      const s = await createComputerControlTarget(apiTarget, {
+        project_dir: projectDir.trim(), name: newName.trim(), transport: newTransport,
+        host: newHost.trim(), proxy_command: newProxy.trim(),
+        request_timeout: newTimeout ? Number(newTimeout) : null,
+      });
+      const created = s.targets.find((t) => t.name === newName.trim());
+      current = s;
+      if (created) agentConfig = created.path;
+      showNewTarget = false;
+      newName = newHost = newProxy = newTimeout = '';
+      newTransport = 'ssh';
+    } catch (e) {
+      newTargetError = e instanceof Error ? e.message : String(e);
+    } finally {
+      creating = false;
+    }
+  }
 
   function fill(s: ComputerControlState) {
     current = s;
@@ -119,7 +153,8 @@
   {:else if !current}
     <button type="button" class="action" onclick={load}>{m.lista_tentar_novamente()}</button>
   {:else}
-    <!-- Sem isto o gerenciador de senhas do navegador enfia e-mail na pasta e senha salva na chave. -->
+    <!-- Chave em campo de texto mascarado por CSS, não type="password": com campo de senha no form o
+         gerenciador do navegador ignora o autocomplete e enfia e-mail e senha salvos nos campos. -->
     <form onsubmit={save} autocomplete="off">
       <label class="check">
         <input type="checkbox" bind:checked={enabled} disabled={saving} />
@@ -131,14 +166,44 @@
       <input id="cc-dir" name="cc-dir" autocomplete="off" bind:value={projectDir} disabled={saving || !enabled} spellcheck="false" />
 
       <label for="cc-agent">{m.computer_control_target()}</label>
-      {#if current.agent_configs.length}
-        <select id="cc-agent" bind:value={agentConfig} disabled={saving || !enabled}>
-          {#each current.agent_configs as c (c)}<option value={c}>{fileName(c)}</option>{/each}
-        </select>
-      {:else}
-        <input id="cc-agent" name="cc-agent" autocomplete="off" bind:value={agentConfig} disabled={saving || !enabled} spellcheck="false" />
-      {/if}
+      <div class="row">
+        {#if current.targets.length}
+          <select id="cc-agent" bind:value={agentConfig} disabled={saving || !enabled}>
+            {#each current.targets as t (t.path)}<option value={t.path}>{targetLabel(t)}</option>{/each}
+          </select>
+        {:else}
+          <input id="cc-agent" name="cc-agent" autocomplete="off" bind:value={agentConfig} disabled={saving || !enabled} spellcheck="false" />
+        {/if}
+        <button type="button" onclick={() => (showNewTarget = !showNewTarget)} aria-expanded={showNewTarget}
+                disabled={saving || !enabled}>{m.computer_control_new_target()}</button>
+      </div>
       <p class="hint">{m.computer_control_target_hint()}</p>
+
+      {#if showNewTarget}
+        <div class="new-target">
+          <label for="cc-new-name">{m.computer_control_target_name()}</label>
+          <input id="cc-new-name" name="cc-new-name" autocomplete="off" bind:value={newName} placeholder="delphi-03" spellcheck="false" />
+          <div class="presets" role="radiogroup" aria-label={m.computer_control_target_kind()}>
+            <button type="button" role="radio" aria-checked={newTransport === 'ssh'} class:on={newTransport === 'ssh'}
+                    onclick={() => (newTransport = 'ssh')}>{m.computer_control_target_ssh()}</button>
+            <button type="button" role="radio" aria-checked={newTransport === 'local'} class:on={newTransport === 'local'}
+                    disabled={!current.local_available} onclick={() => (newTransport = 'local')}>{m.computer_control_target_local()}</button>
+          </div>
+          {#if !current.local_available}<p class="hint">{m.computer_control_target_local_hint()}</p>{/if}
+          {#if newTransport === 'ssh'}
+            <label for="cc-new-host">{m.computer_control_target_host()}</label>
+            <input id="cc-new-host" name="cc-new-host" autocomplete="off" bind:value={newHost} placeholder="usuario@maquina" spellcheck="false" />
+            <label for="cc-new-proxy">{m.computer_control_target_proxy()}</label>
+            <input id="cc-new-proxy" name="cc-new-proxy" autocomplete="off" bind:value={newProxy} spellcheck="false" />
+          {/if}
+          <label for="cc-new-timeout">{m.computer_control_target_timeout()}</label>
+          <input id="cc-new-timeout" name="cc-new-timeout" autocomplete="off" type="number" min="1" max="600" bind:value={newTimeout} />
+          {#if newTargetError}<p class="err" role="alert">{newTargetError}</p>{/if}
+          <button type="button" class="action" onclick={createTarget} disabled={creating || !newName.trim()} aria-busy={creating}>
+            {creating ? m.computer_control_target_creating() : m.computer_control_target_create()}
+          </button>
+        </div>
+      {/if}
 
       <label for="cc-jev">{m.computer_control_jev_key()}</label>
       <p class="hint">
@@ -148,8 +213,8 @@
             : m.computer_control_key_saved({ tail: current.jev_key_tail }))
           : m.computer_control_key_missing()}
       </p>
-      <input id="cc-jev" name="cc-jev" type="password" bind:value={newJevKey} placeholder={m.computer_control_replace_key()}
-             autocomplete="new-password" disabled={saving || !enabled} />
+      <input id="cc-jev" name="cc-jev" class="secret" bind:value={newJevKey} placeholder={m.computer_control_replace_key()}
+             autocomplete="off" spellcheck="false" disabled={saving || !enabled} />
 
       <p class="cc-title cc-sub">{m.computer_control_llm()}</p>
       <p class="hint">{m.computer_control_llm_hint()}</p>
@@ -177,8 +242,8 @@
         {#if current.llm_key_set && !current.cliproxy.key_is_cliproxy}
           <p class="hint">{m.computer_control_key_saved({ tail: current.llm_key_tail })}</p>
         {/if}
-        <input id="cc-llm-key" name="cc-llm-key" type="password" bind:value={newLlmKey} placeholder={m.computer_control_replace_key()}
-               autocomplete="new-password" disabled={saving || !enabled} />
+        <input id="cc-llm-key" name="cc-llm-key" class="secret" bind:value={newLlmKey} placeholder={m.computer_control_replace_key()}
+               autocomplete="off" spellcheck="false" disabled={saving || !enabled} />
       {/if}
 
       <label for="cc-model">{m.computer_control_model()}</label>
@@ -232,7 +297,9 @@
   }
   input:disabled, select:disabled { opacity: .6; }
   .row { display: flex; gap: var(--space-2); }
-  .row input { flex: 1; min-width: 0; }
+  .row input, .row select { flex: 1; min-width: 0; }
+  .row button { flex-shrink: 0; white-space: nowrap; }
+  .secret { -webkit-text-security: disc; }
   button, .action {
     padding: var(--space-3) var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
     background: var(--surface-raised); color: var(--text-primary); font: inherit; font-size: var(--text-sm); cursor: pointer;
@@ -241,6 +308,11 @@
   .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button:disabled { opacity: .6; cursor: default; }
   .presets { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+  .new-target {
+    display: flex; flex-direction: column; gap: var(--space-2);
+    padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+  }
+  .new-target label { margin-top: 0; }
   .presets .on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
   .help summary { cursor: pointer; color: var(--text-secondary); font-size: var(--text-sm); }
   .help ol { margin-top: var(--space-2); }

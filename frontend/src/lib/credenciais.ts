@@ -176,7 +176,11 @@ export function consertarHarness(alvo: Server | null, conserto: string): Promise
 }
 
 // MCP hangar-computer-control. As chaves nunca voltam inteiras: só se existem e o final.
+export interface ComputerControlTarget { name: string; path: string; transport: string; host: string }
+
 export interface ComputerControlState {
+  targets: ComputerControlTarget[];
+  local_available: boolean;   // o servidor é Windows: "este computador" pode ser alvo
   enabled: boolean;
   project_dir: string;
   agent_config: string;
@@ -211,6 +215,13 @@ export function getComputerControl(target: Server | null): Promise<ComputerContr
 
 export function saveComputerControl(target: Server | null, request: ComputerControlRequest): Promise<ComputerControlState> {
   return em(target, '/api/computer-control', { method: 'PUT', body: JSON.stringify(request) });
+}
+
+export function createComputerControlTarget(target: Server | null, request: {
+  project_dir: string; name: string; transport: 'ssh' | 'local'; host?: string; proxy_command?: string;
+  request_timeout?: number | null;
+}): Promise<ComputerControlState> {
+  return em(target, '/api/computer-control/targets', { method: 'POST', body: JSON.stringify(request) });
 }
 
 export function listComputerControlModels(target: Server | null, request: {

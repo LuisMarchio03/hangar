@@ -57,6 +57,22 @@ def test_estado_nunca_devolve_a_chave_inteira(home):
     assert "chave-do-llm-123" not in texto and "chave-do-jev-456" not in texto
 
 
+def test_cria_alvo_ssh_e_recusa_repetido_e_local_fora_do_windows(home, monkeypatch):
+    projeto = str(home / "Projetos" / cc.NAME)
+    estado = cc.create_target({"project_dir": projeto, "name": "delphi-03", "transport": "ssh",
+                               "host": "delphi-03", "proxy_command": "", "request_timeout": 40})
+    alvo = next(t for t in estado["targets"] if t["name"] == "delphi-03")
+    cfg = json.loads(open(alvo["path"]).read())
+    assert cfg["transport"] == "ssh" and cfg["host"] == "delphi-03" and cfg["request_timeout"] == 40
+    with pytest.raises(cc.ComputerControlError) as e:
+        cc.create_target({"project_dir": projeto, "name": "delphi-03", "transport": "ssh", "host": "x"})
+    assert e.value.code == "erro_computer_control_target_exists"
+    monkeypatch.setattr(cc.os, "name", "posix")
+    with pytest.raises(cc.ComputerControlError) as e:
+        cc.create_target({"project_dir": projeto, "name": "eu", "transport": "local"})
+    assert e.value.code == "erro_computer_control_local_only_windows"
+
+
 def test_preserva_variavel_que_a_tela_nao_controla(home):
     principal = home / ".claude.json"
     cc.save(_pedido(home))

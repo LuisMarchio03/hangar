@@ -126,6 +126,63 @@ def _tail(key: str) -> str:
     return key[-4:] if len(key) >= 8 else ""
 
 
+def _venv_python(project: Path) -> Path:
+    return project / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+
+def _targets(project: Path) -> list[dict]:
+    """Os `<nome>-agent.json` da pasta do projeto: cada um é uma máquina que o MCP alcança."""
+    out = []
+    for p in sorted(project.glob("*-agent.json")) if project.is_dir() else []:
+        try:
+            cfg = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cfg = {}
+        cfg = cfg if isinstance(cfg, dict) else {}
+        out.append({"name": p.name.removesuffix("-agent.json"), "path": str(p),
+                    "transport": cfg.get("transport", "local"), "host": cfg.get("host", "")})
+    return out
+
+
+def create_target(body: dict) -> dict:
+    """Cria `<nome>-agent.json` na pasta do projeto. SSH aponta pra um Windows na rede; local é o
+    próprio Windows onde este Hangar roda."""
+    project = Path(str(body.get("project_dir") or "").strip()).expanduser()
+    if not project.is_dir():
+        raise ComputerControlError(400, "erro_computer_control_dir",
+                                   f"{project} não tem servidor_mcp.py e .venv/bin/python", dir=str(project))
+    name = str(body.get("name") or "").strip()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,40}", name):
+        raise ComputerControlError(400, "erro_computer_control_target_name",
+                                   "nome do alvo: letras minúsculas, números, ponto, hífen ou sublinhado")
+    path = project / f"{name}-agent.json"
+    if path.exists():
+        raise ComputerControlError(409, "erro_computer_control_target_exists", f"o alvo {name} já existe",
+                                   name=name)
+    agent_exe = project / "dist" / "windows-agent.exe"
+    cfg: dict
+    if body.get("transport") == "local":
+        if os.name != "nt":
+            raise ComputerControlError(400, "erro_computer_control_local_only_windows",
+                                       "este computador só pode ser alvo quando o Hangar roda no Windows")
+        cfg = {"transport": "local", "command": [str(agent_exe)]}
+    else:
+        host = str(body.get("host") or "").strip()
+        if not host or any(c.isspace() for c in host):
+            raise ComputerControlError(400, "erro_computer_control_target_host", "informe o host SSH (sem espaços)")
+        cfg = {"transport": "ssh", "host": host, "agent_path": str(agent_exe)}
+        proxy = str(body.get("proxy_command") or "").strip()
+        if proxy:
+            cfg["proxy_command"] = proxy
+    timeout = body.get("request_timeout")
+    if timeout:
+        cfg["request_timeout"] = int(timeout)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}")
+    tmp.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    atomico.substituir(tmp, path)
+    return state()
+
+
 def state() -> dict:
     """O que a tela mostra. Chave nunca sai inteira: só se existe e os 4 últimos caracteres."""
     enabled = _entry(_main_file()) is not None
@@ -137,8 +194,11 @@ def state() -> dict:
     jev = env.get("TYPESAFE_API_KEY", "")
     jev_settings = _jev_from_settings()
     cliproxy = _cliproxy_keys()
-    agents = sorted(str(p) for p in Path(project).glob("*-agent.json")) if Path(project).is_dir() else []
+    targets = _targets(Path(project))
+    agents = [t["path"] for t in targets]
     return {
+        "targets": targets,
+        "local_available": os.name == "nt",
         "enabled": enabled,
         "project_dir": project,
         "agent_config": env.get("HCC_AGENT_CONFIG", agents[0] if agents else ""),
@@ -174,7 +234,7 @@ def save(body: dict) -> dict:
         return state()
 
     project = Path(str(body.get("project_dir") or "").strip()).expanduser()
-    python = project / ".venv" / "bin" / "python"
+    python = _venv_python(project)
     if not (project / "servidor_mcp.py").is_file() or not python.exists():
         raise ComputerControlError(400, "erro_computer_control_dir",
                                    f"{project} não tem servidor_mcp.py e .venv/bin/python", dir=str(project))
@@ -200,7 +260,9 @@ def save(body: dict) -> dict:
     llm_key = llm_key or previous.get("LLM_PROXY_KEY", "")
     jev = str(body.get("jev_key") or "") or previous.get("TYPESAFE_API_KEY", "") or _jev_from_settings()
 
-    managed = {"PYTHONPATH": str(project), "HCC_AGENT_CONFIG": agent, "LLM_PROXY_URL": url,
+    # HCC_AGENT_CONFIG é o alvo padrão; HCC_AGENTS_DIR, a pasta de onde o MCP tira os outros.
+    managed = {"PYTHONPATH": str(project), "HCC_AGENT_CONFIG": agent, "HCC_AGENTS_DIR": str(project),
+               "LLM_PROXY_URL": url,
                "LLM_MODEL": str(body.get("llm_model") or "").strip(), "LLM_EFFORT": effort,
                "LLM_PROXY_KEY": llm_key, "TYPESAFE_API_KEY": jev}
     # O resto do env é de quem montou o MCP e fica como está (o VIRTUAL_ENV vazio de propósito

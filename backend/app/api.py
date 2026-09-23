@@ -6485,6 +6485,21 @@ def computer_control_put(body: ComputerControlBody):
     return _computer_control_call(cc.save, body.model_dump())
 
 
+class ComputerControlTargetBody(_StrictBody):
+    project_dir: str
+    name: str
+    transport: Literal["ssh", "local"] = "ssh"
+    host: str = ""
+    proxy_command: str = ""
+    request_timeout: int | None = Field(default=None, ge=1, le=600)
+
+
+@app.post("/api/computer-control/targets", dependencies=[Depends(require_auth)])
+def computer_control_new_target(body: ComputerControlTargetBody):
+    from app import computer_control as cc
+    return _computer_control_call(cc.create_target, body.model_dump())
+
+
 @app.post("/api/computer-control/models", dependencies=[Depends(require_auth)])
 def computer_control_models(body: ComputerControlModelsBody):
     from app import computer_control as cc
