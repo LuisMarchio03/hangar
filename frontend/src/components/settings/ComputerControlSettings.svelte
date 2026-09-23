@@ -1,9 +1,10 @@
 <script lang="ts">
   import type { Server } from '../../lib/auth';
   import { getComputerControl, saveComputerControl, listComputerControlModels, createComputerControlTarget,
-    installComputerControl, testComputerControlHost,
+    installComputerControl, testComputerControlHost, getComputerControlWindowsSetup,
     type ComputerControlState, type ComputerControlTarget } from '../../lib/credenciais';
   import EscopoChip from './EscopoChip.svelte';
+  import { copyText } from '../../lib/clipboard';
   import * as m from '../../paraglide/messages';
 
   let { apiTarget }: { apiTarget: Server | null } = $props();
@@ -64,6 +65,28 @@
     newHost.trim().split('@').pop()!.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-._]+|[-._]+$/g, '').slice(0, 41),
   );
   const finalName = $derived(newName.trim() || (newTransport === 'ssh' ? derivedName : ''));
+
+  // Prompt pra colar num agente rodando no Windows: liga o SSH e autoriza a chave deste controlador.
+  let setupPrompt = $state('');
+  let setupError = $state('');
+  let setupLoading = $state(false);
+  let setupCopied = $state(false);
+  async function loadSetupPrompt() {
+    setupLoading = true;
+    setupError = '';
+    setupCopied = false;
+    try {
+      setupPrompt = (await getComputerControlWindowsSetup(apiTarget, newHost.trim())).prompt;
+    } catch (e) {
+      setupError = e instanceof Error ? e.message : String(e);
+    } finally {
+      setupLoading = false;
+    }
+  }
+  async function copySetupPrompt() {
+    try { await copyText(setupPrompt); setupCopied = true; }
+    catch (e) { setupError = e instanceof Error ? e.message : String(e); }
+  }
 
   async function testConnection() {
     if (testing || !newHost.trim()) return;
@@ -263,6 +286,22 @@
                 {testResult.ok ? m.computer_control_target_test_ok() : m.computer_control_target_test_fail({ detail: testResult.detail })}
               </p>
             {/if}
+            <details class="help" open={testResult?.ok === false}>
+              <summary>{m.computer_control_setup_title()}</summary>
+              <p class="hint">{m.computer_control_setup_hint()}</p>
+              {#if setupPrompt}
+                <textarea class="setup-prompt" readonly rows="10" value={setupPrompt}></textarea>
+                <div class="row">
+                  <button type="button" onclick={copySetupPrompt}>{setupCopied ? m.computer_control_setup_copied() : m.computer_control_setup_copy()}</button>
+                  <button type="button" onclick={loadSetupPrompt} disabled={setupLoading}>{m.computer_control_setup_regenerate()}</button>
+                </div>
+              {:else}
+                <button type="button" class="action" onclick={loadSetupPrompt} disabled={setupLoading} aria-busy={setupLoading}>
+                  {m.computer_control_setup_generate()}
+                </button>
+              {/if}
+              {#if setupError}<p class="err" role="alert">{setupError}</p>{/if}
+            </details>
           {/if}
 
           <label for="cc-new-name">{m.computer_control_target_name()}</label>
@@ -408,6 +447,11 @@
   }
   .new-target label { margin-top: var(--space-1); }
   .new-target .help { display: flex; flex-direction: column; gap: var(--space-2); }
+  .setup-prompt {
+    width: 100%; box-sizing: border-box; padding: var(--space-3); border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md); background: var(--surface-inset); color: var(--text-primary);
+    font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.5; resize: vertical;
+  }
   .presets .on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
   .help summary { cursor: pointer; color: var(--text-secondary); font-size: var(--text-sm); }
   .help ol { margin-top: var(--space-2); }

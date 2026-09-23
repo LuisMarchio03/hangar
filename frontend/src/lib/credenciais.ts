@@ -232,6 +232,10 @@ export function testComputerControlHost(target: Server | null, request: { host: 
   return em(target, '/api/computer-control/test-host', { method: 'POST', body: JSON.stringify(request) }, 30000);
 }
 
+export function getComputerControlWindowsSetup(target: Server | null, host: string): Promise<{ prompt: string; user: string }> {
+  return em(target, `/api/computer-control/windows-setup?host=${encodeURIComponent(host)}`);
+}
+
 export function createComputerControlTarget(target: Server | null, request: {
   project_dir: string; name: string; transport: 'ssh' | 'local'; host?: string; proxy_command?: string;
   request_timeout?: number | null;

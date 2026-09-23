@@ -156,7 +156,9 @@ def _check_host(host: str) -> str:
 def test_host(host: str, proxy_command: str = "") -> dict:
     """Entra por SSH sem senha e roda `echo ok`: é o que o agente vai precisar fazer."""
     host = _check_host(host)
-    argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
+    # accept-new: máquina nova não tem host key conhecida e o teste é justamente o primeiro contato.
+    # Chave que MUDOU continua recusada.
+    argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=accept-new"]
     if proxy_command.strip():
         argv += ["-o", f"ProxyCommand={proxy_command.strip()}"]
     argv += ["--", host, "echo", "ok"]
@@ -169,6 +171,60 @@ def test_host(host: str, proxy_command: str = "") -> dict:
         return {"ok": False, "detail": "sem resposta em 20 s"}
     ok = r.returncode == 0 and "ok" in r.stdout
     return {"ok": ok, "detail": "" if ok else ((r.stderr or r.stdout).strip()[-400:] or f"saiu com {r.returncode}")}
+
+
+def _ssh_identity(host: str) -> tuple[str, str]:
+    """(usuário, chave pública) que o `ssh` usaria pra esse host, pela resolução do próprio `ssh -G`."""
+    try:
+        r = subprocess.run(["ssh", "-G", "--", host], capture_output=True, text=True, errors="replace", timeout=10,
+                           stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return "", ""
+    user, key = "", ""
+    for ln in r.stdout.splitlines():
+        k, _, v = ln.partition(" ")
+        if k == "user" and not user:
+            user = v.strip()
+        elif k == "identityfile" and not key:
+            pub = Path(os.path.expanduser(v.strip()) + ".pub")
+            if pub.is_file():
+                key = pub.read_text(encoding="utf-8", errors="replace").strip()
+    return user, key
+
+
+_SETUP_PROMPT = """Configure este Windows para ser controlado pelo Hangar (MCP hangar-computer-control) a partir de outra máquina, por SSH com chave. Faça na ordem, confira cada passo e pare pra me perguntar se algo não bater.
+
+1. Rode tudo num PowerShell elevado (como Administrador). Se não estiver elevado, me peça pra abrir um.
+2. OpenSSH Server instalado, ligado e iniciando sozinho:
+   Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+   Set-Service -Name sshd -StartupType Automatic; Start-Service sshd
+3. Porta 22 liberada no firewall, se ainda não houver regra de entrada pra ela:
+   New-NetFirewallRule -Name OpenSSH-Server-In-TCP -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
+4. Autorize esta chave pública pro usuário {user_line}:
+   {key}
+   - Usuário administrador: a chave vai em C:\\ProgramData\\ssh\\administrators_authorized_keys, com permissão só pra Administradores e SYSTEM (use os SIDs, que valem em Windows de qualquer idioma):
+     icacls.exe C:\\ProgramData\\ssh\\administrators_authorized_keys /inheritance:r /grant '*S-1-5-32-544:F' /grant '*S-1-5-18:F'
+   - Usuário comum: em C:\\Users\\<usuário>\\.ssh\\authorized_keys.
+   Acrescente sem apagar as chaves que já estiverem lá.
+5. Esse usuário precisa ser administrador (o agente sobe como tarefa agendada elevada) e ficar logado numa sessão gráfica ATIVA: tela desbloqueada e sessão RDP não desconectada. Pra deixar a sessão ativa sem cliente RDP: tscon <id> /dest:console.
+6. Confira: o serviço sshd está Running, a regra de firewall existe e o arquivo de chaves contém a chave acima.
+
+Não mude outras configurações de segurança além dessas. No fim, me diga o nome desta máquina na rede (ou o IP) e o usuário, pra eu cadastrar no Hangar."""
+
+
+def windows_setup(host: str) -> dict:
+    """Prompt pra colar num agente (Claude Code, Codex…) rodando no Windows: deixa a máquina pronta
+    pra este controlador entrar por SSH sem senha."""
+    host = _check_host(host) if host.strip() else "novo-windows"
+    explicit_user = host.split("@")[0] if "@" in host else ""
+    user, key = _ssh_identity(host)
+    if not key:
+        raise ComputerControlError(400, "erro_computer_control_no_ssh_key",
+                                   "esta máquina não tem chave SSH: crie uma com ssh-keygen -t ed25519")
+    user = explicit_user or user
+    user_line = (f"{user} (é o usuário com que o Hangar vai entrar; se ele não existir aqui, use o administrador "
+                 f"logado e me diga qual é)") if user else "que vai entrar por SSH (me diga qual é)"
+    return {"prompt": _SETUP_PROMPT.format(user_line=user_line, key=key), "user": user}
 
 
 def _cliproxy_running() -> bool:

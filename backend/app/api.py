@@ -6506,6 +6506,12 @@ def computer_control_test_host(body: ComputerControlTestHostBody):
     return _computer_control_call(cc.test_host, body.host, body.proxy_command)
 
 
+@app.get("/api/computer-control/windows-setup", dependencies=[Depends(require_auth)])
+def computer_control_windows_setup(host: str = ""):
+    from app import computer_control as cc
+    return _computer_control_call(cc.windows_setup, host)
+
+
 @app.post("/api/computer-control/install", dependencies=[Depends(require_auth)])
 def computer_control_install():
     from app import computer_control as cc
