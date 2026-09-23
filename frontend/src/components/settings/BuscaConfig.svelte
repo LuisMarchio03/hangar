@@ -18,6 +18,7 @@
     orquestracao: m.config_modal_orquestracao,
     harnesses: m.harness_titulo,
     sincronizacao: m.sync_config_titulo,
+    computer: m.computer_control_title,
   };
 
   export interface EntradaBusca {

@@ -6445,6 +6445,53 @@ def resume_archived(project: str, session_id: str, body: ResumeArchivedBody = Re
         raise HTTPException(409, str(e))
 
 
+# ── MCP hangar-computer-control: liga/desliga e configura nos .claude.json de todas as contas ──
+class ComputerControlBody(_StrictBody):
+    enabled: bool
+    project_dir: str = ""
+    agent_config: str = ""
+    llm_url: str = ""
+    llm_model: str = ""
+    llm_effort: str = ""
+    llm_key: str | None = None     # None/vazio = mantém a gravada
+    jev_key: str | None = None
+    use_cliproxy_key: bool = False
+
+
+class ComputerControlModelsBody(_StrictBody):
+    llm_url: str
+    llm_key: str | None = None
+    use_saved_key: bool = False
+    use_cliproxy_key: bool = False
+
+
+def _computer_control_call(fn, *a):
+    from app import computer_control as cc
+    try:
+        return fn(*a)
+    except cc.ComputerControlError as e:
+        raise HTTPException(e.status, detail=erro(e.code, e.msg, **e.params)) from None
+
+
+@app.get("/api/computer-control", dependencies=[Depends(require_auth)])
+def computer_control_get():
+    from app import computer_control as cc
+    return _computer_control_call(cc.state)
+
+
+@app.put("/api/computer-control", dependencies=[Depends(require_auth)])
+def computer_control_put(body: ComputerControlBody):
+    from app import computer_control as cc
+    return _computer_control_call(cc.save, body.model_dump())
+
+
+@app.post("/api/computer-control/models", dependencies=[Depends(require_auth)])
+def computer_control_models(body: ComputerControlModelsBody):
+    from app import computer_control as cc
+    return {"models": _computer_control_call(cc.list_models, body.llm_url, body.llm_key,
+                                             body.use_saved_key, body.use_cliproxy_key)}
+
+
 # ── Busca de conteudo cross-session: grep (rg) em todos os transcripts (vivos + arquivados) ──
 @app.get("/api/search", dependencies=[Depends(require_auth)], response_model=list[SearchHit])
 def search_transcripts(q: str = ""):

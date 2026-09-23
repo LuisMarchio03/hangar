@@ -175,6 +175,50 @@ export function consertarHarness(alvo: Server | null, conserto: string): Promise
   return em(alvo, `/api/harness/conserto/${encodeURIComponent(conserto)}`, { method: 'POST' });
 }
 
+// MCP hangar-computer-control. As chaves nunca voltam inteiras: só se existem e o final.
+export interface ComputerControlState {
+  enabled: boolean;
+  project_dir: string;
+  agent_config: string;
+  agent_configs: string[];
+  llm_url: string;
+  llm_model: string;
+  llm_effort: string;
+  llm_key_set: boolean;
+  llm_key_tail: string;
+  jev_key_set: boolean;
+  jev_key_tail: string;
+  jev_key_from_settings: boolean;
+  cliproxy: { preset_url: string; has_keys: boolean; key_is_cliproxy: boolean };
+  files: { path: string; enabled: boolean }[];
+}
+
+export interface ComputerControlRequest {
+  enabled: boolean;
+  project_dir: string;
+  agent_config: string;
+  llm_url: string;
+  llm_model: string;
+  llm_effort: string;
+  llm_key?: string | null;
+  jev_key?: string | null;
+  use_cliproxy_key?: boolean;
+}
+
+export function getComputerControl(target: Server | null): Promise<ComputerControlState> {
+  return em(target, '/api/computer-control');
+}
+
+export function saveComputerControl(target: Server | null, request: ComputerControlRequest): Promise<ComputerControlState> {
+  return em(target, '/api/computer-control', { method: 'PUT', body: JSON.stringify(request) });
+}
+
+export function listComputerControlModels(target: Server | null, request: {
+  llm_url: string; llm_key?: string | null; use_saved_key?: boolean; use_cliproxy_key?: boolean;
+}): Promise<{ models: string[] }> {
+  return em(target, '/api/computer-control/models', { method: 'POST', body: JSON.stringify(request) });
+}
+
 // Código + parâmetros vêm do backend (`codex_msgs.CATALOGO`); o front traduz por `harness_codex_m_<codigo>`.
 // `texto` é o fallback em pt para código que este app ainda não conhece. String crua = backend antigo.
 export type MensagemCodex = { codigo: string | null; params: Record<string, string>; texto: string } | string;
