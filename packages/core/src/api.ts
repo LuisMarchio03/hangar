@@ -1295,6 +1295,13 @@ export async function pairSession(
   });
 }
 
+export function suggestGroupTask(sessions: string[]): Promise<{ task: string }> {
+  return apiFetch<{ task: string }>('/api/pair/task-suggestion', {
+    method: 'POST',
+    body: JSON.stringify({ sessions }),
+  });
+}
+
 export async function unpairSession(name: string): Promise<PairResult> {
   return apiFetch<PairResult>(`/api/sessions/${encodeURIComponent(name)}/pair`, {
     method: 'DELETE',

@@ -7,7 +7,7 @@
   import { arrastarGrupo, mensagemRecusa, type ChaveSessao } from '../lib/arrastarGrupo.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { withServer } from '../lib/auth';
-  import { pairSession, unpairSession, formataErro, canPair } from '@hangar/core';
+  import { pairSession, unpairSession, suggestGroupTask, formataErro, canPair } from '@hangar/core';
   import type { AggSession } from '@hangar/core';
   import * as m from '../paraglide/messages';
 
@@ -57,6 +57,7 @@
 
   let tarefa = $state('');
   let busy = $state(false);
+  let sugerindo = $state(false);
   let erro = $state<string | null>(null);
   let conflito = $state<string | null>(null); // mensagem do 409: troca o botão de confirmar pelo de sobrescrever
   // true quando o backend já fez a fusão/saída mas o `warning` diz que o aviso não chegou a
@@ -72,6 +73,7 @@
     untrack(() => {
       tarefa = p.modo === 'agrupar' ? (alvoSessao?.pair_task || origemSessao?.pair_task || '') : '';
       busy = false;
+      sugerindo = false;
       erro = null;
       conflito = null;
       avisoFalhou = false;
@@ -121,6 +123,26 @@
     }
   }
 
+  async function sugerir() {
+    if (pedido?.modo !== 'agrupar' || busy || sugerindo || !alvoSessao) return;
+    const pedidoEmVoo = pedido; // mesmo motivo do confirmarAgrupar
+    const serverId = alvoSessao.serverId;
+    const nomes = afetados;
+    sugerindo = true;
+    erro = null;
+    try {
+      const res = await withServer(serverId, () => suggestGroupTask(nomes));
+      if (pedido !== pedidoEmVoo) return;
+      tarefa = res.task;
+      conflito = null;
+    } catch (e) {
+      if (pedido !== pedidoEmVoo) return;
+      erro = e instanceof Error && e.message ? e.message : m.grupo_drop_falhou();
+    } finally {
+      if (pedido === pedidoEmVoo) sugerindo = false;
+    }
+  }
+
   async function confirmarSair() {
     if (pedido?.modo !== 'sair' || busy) return;
     const pedidoEmVoo = pedido; // mesmo motivo do confirmarAgrupar
@@ -166,14 +188,19 @@
       </div>
 
       {#if !avisoFalhou}
-        <input
-          type="text"
-          class="gd-tarefa"
-          bind:value={tarefa}
-          oninput={() => { conflito = null; }}
-          placeholder={m.grupo_drop_tarefa()}
-          disabled={busy}
-        />
+        <div class="gd-tarefa-linha">
+          <input
+            type="text"
+            class="gd-tarefa"
+            bind:value={tarefa}
+            oninput={() => { conflito = null; }}
+            placeholder={m.grupo_drop_tarefa()}
+            disabled={busy || sugerindo}
+          />
+          <button type="button" class="gd-btn gd-sugerir" onclick={sugerir} disabled={busy || sugerindo || !!bloqueio}>
+            {sugerindo ? m.grupo_drop_sugerindo() : m.grupo_drop_sugerir()}
+          </button>
+        </div>
       {/if}
 
       {#if erro}<p class="gd-erro">{erro}</p>{/if}
@@ -186,11 +213,11 @@
         {:else}
           <button type="button" class="gd-btn" onclick={fechar} disabled={busy}>{m.comum_cancelar()}</button>
           {#if conflito}
-            <button type="button" class="gd-btn gd-primary" onclick={() => confirmarAgrupar(true)} disabled={busy || !!bloqueio}>
+            <button type="button" class="gd-btn gd-primary" onclick={() => confirmarAgrupar(true)} disabled={busy || sugerindo || !!bloqueio}>
               {m.grupo_drop_substituir_tarefa()}
             </button>
           {:else}
-            <button type="button" class="gd-btn gd-primary" onclick={() => confirmarAgrupar(false)} disabled={busy || !!bloqueio}>
+            <button type="button" class="gd-btn gd-primary" onclick={() => confirmarAgrupar(false)} disabled={busy || sugerindo || !!bloqueio}>
               {m.grupo_drop_confirmar()}
             </button>
           {/if}
@@ -238,7 +265,10 @@
   .gd-label { font-size: var(--text-sm); color: var(--text-secondary); }
   .gd-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
   .gd-lista li { font-size: var(--text-sm); color: var(--text-primary); }
+  .gd-tarefa-linha { display: flex; gap: var(--space-2); }
   .gd-tarefa {
+    flex: 1;
+    min-width: 0;
     height: 44px;
     padding: 0 var(--space-3);
     background: var(--surface-card);
@@ -265,6 +295,7 @@
   }
   .gd-btn:hover { background: var(--bg-surface); }
   .gd-btn:disabled { opacity: 0.5; cursor: default; }
+  .gd-sugerir { flex: 0 0 auto; height: 44px; padding: 0 var(--space-3); }
   .gd-primary { background: var(--accent); color: #fff; }
   .gd-danger { background: var(--error); color: #fff; }
 </style>

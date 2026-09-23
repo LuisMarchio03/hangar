@@ -4292,6 +4292,45 @@ async def _avisar_saida(name: str, expeers: list[str], motivo: str) -> list[dict
     return errs
 
 
+class GroupTaskSuggestionBody(_StrictBody):
+    sessions: list[str]
+
+
+def _conversa_para_resumo(name: str, info: SessionInfo) -> str:
+    from app.pqueue import merged_history
+    msgs = [ev for ev in merged_history(name, info.jsonl, info.provider, 30)
+            if ev.kind in ("user_msg", "assistant_msg") and (ev.text or "").strip()]
+    if not msgs:
+        return ""
+    quem = lambda ev: "usuário" if ev.kind == "user_msg" else "assistente"
+    anteriores = "\n".join(f"{quem(ev)}: {ev.text.strip()[:500]}" for ev in msgs[:-1])[-3000:]
+    # É na última mensagem que o agente costuma deixar o próximo passo: ela vai inteira e marcada.
+    ultima = f"ÚLTIMA MENSAGEM ({quem(msgs[-1])}): {msgs[-1].text.strip()[:2000]}"
+    return f"{anteriores}\n{ultima}" if anteriores else ultima
+
+
+@app.post("/api/pair/task-suggestion", dependencies=[Depends(require_auth)])
+async def group_task_suggestion(body: GroupTaskSuggestionBody):
+    """Sugere a tarefa do grupo pelo fim da conversa de cada sessão. Sessão sem conversa (ou de
+    outro servidor) fica de fora; nenhuma com conversa → 422, sem chamar o LLM."""
+    conversas: dict[str, str] = {}
+    for nome in dict.fromkeys(body.sessions):
+        info = await _cached_info(nome)
+        if not info or not info.jsonl:
+            continue
+        texto = await asyncio.to_thread(_conversa_para_resumo, nome, info)
+        if texto:
+            conversas[nome] = texto
+    if not conversas:
+        raise HTTPException(422, detail=erro("erro_grupo_sem_conversa",
+                                             "nenhuma das sessões tem conversa para resumir"))
+    try:
+        tarefa = await asyncio.to_thread(narrar.sugerir_tarefa_grupo, conversas)
+    except narrar.NarrarError as e:
+        raise HTTPException(e.status, e.detail)
+    return {"task": tarefa}
+
+
 @app.delete("/api/sessions/{name}/pair", dependencies=[Depends(require_auth)])
 async def unpair_session(name: str):
     """`name` SAI do grupo (os demais membros continuam entre si; grupo restante de 1 dissolve).

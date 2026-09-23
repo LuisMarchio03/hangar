@@ -243,6 +243,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_shell_criacao_falhou: () => m.erro_shell_criacao_falhou(),
   erro_peer_nao_informado: () => m.erro_peer_nao_informado(),
   erro_autopareamento: () => m.erro_autopareamento(),
+  erro_grupo_sem_conversa: () => m.erro_grupo_sem_conversa(),
   erro_initiator_invalido: () => m.erro_initiator_invalido(),
   erro_pareamento_cross_1_1: () => m.erro_pareamento_cross_1_1(),
   erro_pareamento_server_id_ausente: () => m.erro_pareamento_server_id_ausente(),
