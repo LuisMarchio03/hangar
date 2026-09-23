@@ -33,12 +33,12 @@ vi.mock('@hangar/core', async original => ({
 afterEach(() => { sessionsStore.release(); streams.clear(); objetos.clear(); connectionIds.clear(); vi.clearAllTimers(); vi.useRealTimers();
   configureDiag({ registrar: () => {}, novoReq: () => '' }); _limparEsfriamentoParaTestes(); });
 
-it('falha real marca também o servidor ativo; erro do produtor não é queda de rede', () => {
+it('falha real marca os outros servidores, nunca o ativo; erro do produtor não é queda de rede', () => {
   vi.useFakeTimers();
   sessionsStore.retain();
   objetos.get('lan')!.onerror!();
   objetos.get('vpn')!.onerror!();
-  expect(estaDesligado('lan')).toBe(true);
+  expect(estaDesligado('lan')).toBe(false);   // o ativo não espera: restart do backend não o deixa offline
   expect(estaDesligado('vpn')).toBe(true);
   sessionsStore.buscarAgora('vpn');
   streams.get('vpn')!.get('list_error')!({ data: '' });
@@ -55,7 +55,7 @@ it('resposta recebida fora da lista retoma o stream e atualiza as sessões antig
   expect(estaDesligado('vpn')).toBe(true);
   expect(sessionsStore.sessionsForServer('vpn')).toEqual([first]);
 
-  vi.advanceTimersByTime(29000);
+  vi.advanceTimersByTime(1900);   // antes da primeira nova tentativa (2 s)
   expect(objetos.get('vpn')).toBe(previous);
   const lan = objetos.get('lan');
   registrarSucesso('vpn');
@@ -218,7 +218,7 @@ it('retoma automaticamente após o prazo, mantendo offline até uma resposta vá
   sessionsStore.retain();
   const previous = objetos.get('vpn');
   previous!.onerror!();
-  vi.advanceTimersByTime(30000);
+  vi.advanceTimersByTime(2000);
   expect(objetos.get('vpn')).not.toBe(previous);
   expect(estaDesligado('vpn')).toBe(true);
   streams.get('vpn')!.get('sessions')!({ data: JSON.stringify([{ name: 'voltou', jsonl: '/v' }]) });
@@ -230,11 +230,11 @@ it('remontar respeita o restante do prazo e o timeout também agenda outra tenta
   vi.useFakeTimers();
   sessionsStore.retain();
   objetos.get('vpn')!.onerror!();
-  vi.advanceTimersByTime(20000);
+  vi.advanceTimersByTime(1000);
   sessionsStore.release();
   sessionsStore.retain();
   const previous = objetos.get('vpn');
-  vi.advanceTimersByTime(9999);
+  vi.advanceTimersByTime(999);
   expect(objetos.get('vpn')).toBe(previous);
   vi.advanceTimersByTime(1);
   const silent = objetos.get('vpn');
@@ -321,8 +321,9 @@ it('registra primeiro quadro, parse inválido, silêncio e volta sem copiar quad
   expect(estaDesligado('lan')).toBe(false);
   await vi.advanceTimersByTimeAsync(25000);
   expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ codigo: 'silencio', espera_ms: 25000 }), 'http://lan');
-  expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'lista.retentativa', espera_ms: 2000 }), 'http://lan');
-  await vi.advanceTimersByTimeAsync(2000);
+  // `lan` é o ativo: não ganha prazo, tenta de novo em 1 s.
+  expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'lista.retentativa', espera_ms: 1000 }), 'http://lan');
+  await vi.advanceTimersByTimeAsync(1000);
   publicar('[]');
   expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'lista.voltou' }), 'http://lan');
   expect(JSON.stringify(registrar.mock.calls.map(([e]) => e))).not.toMatch(/segredo|conversa|token|http:/);
