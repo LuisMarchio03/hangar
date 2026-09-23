@@ -6,7 +6,7 @@
 // Um lado falhar não pode deixar o outro registrado em silêncio — o par completo só vira sucesso
 // quando os dois gravaram E os dois testes passaram.
 import type { Server } from './auth';
-import { getBaseUrl, getToken } from './auth';
+import { getBaseUrl, getToken, listServers } from './auth';
 import { checkPeer, getIdentificador, gravarPeer } from './peers';
 import { alcanceDoServidor } from './alcance';
 
@@ -66,7 +66,10 @@ export async function registrarPeerDoisLados(
 
   // 2) Resolve a identidade do DONO — o que o peer precisa guardar para chamar esta máquina
   //    de volta: o nome REAL do backend (CP_SERVER_ID), não o rótulo local do celular.
-  const remoto: Server = { id: alvo.id, label: alvo.id, baseUrl: alvo.base_url, token: alvo.token };
+  // O id tem que ser o da lista: é por ele que a resposta tira a marca de offline do servidor.
+  const norm = (u: string) => u.replace(/\/+$/, '');
+  const naLista = listServers().find((s) => norm(s.baseUrl) === norm(alvo.base_url));
+  const remoto: Server = { id: naLista?.id ?? alvo.id, label: alvo.id, baseUrl: alvo.base_url, token: alvo.token };
   const meuToken = dono?.token ?? getToken() ?? '';
   const meuBase = meuEndereco || (await enderecoDoDono(dono));
   let meuId = '';
