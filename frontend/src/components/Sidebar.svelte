@@ -26,8 +26,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import { createDragToGroup, dragChave } from '../lib/dragToGroup';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '@hangar/core';
-  import { planBadge } from '@hangar/core';
-  import PlanBar from './PlanBar.svelte';
   import type { WorkspaceAction, WorkspaceView } from '../lib/workspaceCommands';
   import WorkspaceNav from './WorkspaceNav.svelte';
   import { sidebarPrefs } from '../lib/sidebarPrefs.svelte';
@@ -890,14 +888,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   <span class="prov-rail" title={provTag ?? 'Claude'}><ProviderGlyph provider={s.provider} size={10} /></span>
                 {/if}
               </span>
-              {#if !expanded && !model.selectMode}
-                <!-- Rail recolhido: barra única na base da row, irmã de .lead (não dentro dele —
-                     .lead é a coluna das iniciais). .sess-main precisa de position:relative pra
-                     ancorar o position:absolute do compact (ver CSS). A barra e o glifo do harness
-                     disputavam esta mesma faixa e eram mutuamente exclusivos; o glifo subiu pro
-                     canto de cima do avatar e a base voltou a ser só da barra. -->
-                <PlanBar session={s} compact />
-              {/if}
               {#if expanded}
               <span class="row-info">
                   <span class="name-row">
@@ -985,7 +975,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                       {/if}
                     </span>
                   {/if}
-                  {#if s.then_target || s.pair_peers?.length || s.loop_status || s.engine || s.plan_name}
+                  {#if s.then_target || s.pair_peers?.length || s.loop_status || s.engine}
                     <!-- Chips informativos (⏳/🔗/🤝/↻/⚙) na COLUNA DE TEXTO, nao ao lado do state-chip:
                          inline eles cobriam o cwd em sidebar estreita (mesmo fix do SessionCard mobile).
                          O glifo do agente saiu daqui pro canto do avatar (mesmo arranjo do trilho) e a
@@ -1004,12 +994,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                           <span class="chain-chip" style="color: {LOOP_TONE_COLOR[lb.tone]}; background: color-mix(in srgb, {LOOP_TONE_COLOR[lb.tone]} 14%, transparent);" title={m.sessao_loop_runner()}>{lb.label}</span>
                         {/if}
                       {/if}
-                      {#if s.plan_name}
-                        {@const pb = planBadge(s)}
-                        {#if pb}
-                          <span class="plan-chip" class:plan-chip--done={pb.complete} title={pb.title}>{pb.label}</span>
-                        {/if}
-                      {/if}
                       {#if s.engine}
                         <!-- Sem isto nada na lista distingue uma sessão de motor de uma da conta Anthropic.
                              NÃO mostramos custo aqui: o preço que o Claude Code calcula é tabela Anthropic
@@ -1018,7 +1002,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                       {/if}
                     </span>
                   {/if}
-                  <PlanBar session={s} />
                 </span>
                 <!-- O envelope .state-chip existe pelo anel de travada e pelas regras que ja
                      miravam essa classe (hover da linha, papel de parede no app.css); a pilula em
@@ -1891,25 +1874,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     max-width: 96px; overflow: hidden; text-overflow: ellipsis;
     color: var(--accent); background: var(--accent-dim);
   }
-  /* Progresso do plano do superpowers (Task 3). */
-  .plan-chip {
-    padding: 1px 6px;
-    border-radius: var(--radius-full);
-    background: var(--accent-dim);
-    color: var(--accent);
-    font-size: 10px;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-    /* O rotulo agora carrega o NOME do plano, que e longo e variavel: sem teto ele empurrava o resto
-       da linha de chips pra fora. Corta o nome com reticencias e mantem a linha inteira. */
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 22ch;
-  }
-  .plan-chip--done {
-    background: color-mix(in srgb, var(--success) 14%, transparent);
-    color: var(--success);
-  }
   /* Motor de modelo (Task 5): sessao rodando fora da conta Anthropic. */
   /* Provider da sessão (Codex/Pi) — só o que NÃO é Claude ganha chip. Tinta neutra de propósito:
      é rótulo de identidade, não estado; accent já é "motor" e âmbar já é "sem id". */
@@ -1982,9 +1946,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     55%      { box-shadow: 0 0 0 7px color-mix(in srgb, var(--cor, transparent) 0%, transparent); }
   }
   .sidebar.collapsed .sess-row { justify-content: center; }
-  /* position:relative pra ancorar a PlanBar compact (position:absolute) — sem isto ela flutua em
-     relação ao body inteiro em vez de ficar na base desta linha. */
-  .sidebar.collapsed .sess-main { justify-content: center; padding: 0; position: relative; }
+  .sidebar.collapsed .sess-main { justify-content: center; padding: 0; }
   .sess-row.active .sess-main { color: var(--text-primary); }
   .sess-name {
     flex: 0 1 auto; min-width: min-content; max-width: 100%;
