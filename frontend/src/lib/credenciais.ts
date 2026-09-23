@@ -200,6 +200,7 @@ export interface ComputerControlState {
   jev_key_from_settings: boolean;
   cliproxy: { preset_url: string; has_keys: boolean; key_is_cliproxy: boolean; installed: boolean; running: boolean };
   files: { path: string; enabled: boolean }[];
+  migration_skipped?: string[];   // só no retorno do install: alvos da pasta local que não deu pra ler
 }
 
 export interface ComputerControlRequest {

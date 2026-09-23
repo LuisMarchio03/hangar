@@ -39,8 +39,12 @@
     installError = '';
     savedMessage = '';
     try {
-      fill(await installComputerControl(apiTarget));
+      const r = await installComputerControl(apiTarget);
+      fill(r);
       savedMessage = m.computer_control_installed({ tag: current?.installed_tag ?? '' });
+      if (r.migration_skipped?.length) {
+        installError = m.computer_control_migration_skipped({ files: r.migration_skipped.join(', ') });
+      }
     } catch (e) {
       installError = e instanceof Error ? e.message : String(e);
     } finally {

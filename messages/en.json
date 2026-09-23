@@ -395,6 +395,7 @@
   "computer_control_update": "Update to the latest version",
   "computer_control_installing": "Downloading…",
   "computer_control_installed": "Version {tag} installed.",
+  "computer_control_migration_skipped": "These targets from the local folder could not be read and were left out: {files}. Check the file and create the target again.",
   "computer_control_enable": "Enable in sessions",
   "computer_control_enable_hint": "Off removes the MCP from ~/.claude.json and from each account's. Applies to sessions opened after saving.",
   "computer_control_dir": "Project folder",

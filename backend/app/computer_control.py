@@ -5,6 +5,7 @@ espelho das contas só acrescenta, nunca apaga, então quem desliga precisa tira
 a chave desse MCP é tocada: o resto do arquivo é estado do CLI daquela conta.
 """
 import json
+import logging
 import os
 import re
 import shutil
@@ -17,6 +18,8 @@ from pathlib import Path
 
 from app import atomico
 from app.config import list_config_dirs
+
+_log = logging.getLogger("hangar.computer_control")
 
 NAME = "hangar-computer-control"
 REPO = "jeffer1312/hangar-computer-control"
@@ -488,6 +491,8 @@ def install() -> dict:
     before = _known_entry()
     targets = _package_targets()
     targets.mkdir(parents=True, exist_ok=True)
+    # Alvo que não deu pra ler não pode sumir calado da lista: volta no resultado pra tela avisar.
+    puladas: list[str] = []
     if _mode(before) == "local":
         for p in _local_project(before).glob("*-agent.json"):
             dest = targets / p.name
@@ -495,21 +500,28 @@ def install() -> dict:
                 continue
             try:
                 cfg = json.loads(p.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
+            except (OSError, ValueError) as e:
+                _log.warning("computer-control: alvo %s não migrou: %s", p.name, e)
+                puladas.append(p.name)
                 continue
-            if isinstance(cfg, dict):
-                dest.write_text(json.dumps(_migrated(cfg, exe), indent=2) + "\n", encoding="utf-8")
+            if not isinstance(cfg, dict):
+                puladas.append(p.name)
+                continue
+            dest.write_text(json.dumps(_migrated(cfg, exe), indent=2) + "\n", encoding="utf-8")
     _write(_install_dir() / "install.json", {"tag": tag, "uvx": uvx})
 
     s = state()
+    s["migration_skipped"] = puladas
     default = Path(s["agent_config"]).name if s["agent_config"] else ""
     agent = targets / default if default and (targets / default).is_file() else None
     agent = agent or next(iter(sorted(targets.glob("*-agent.json"))), None)
     if agent is None:
         return s   # sem alvo ainda: a tela pede pra criar um antes de ligar
-    return save({"enabled": True, "mode": "package", "agent_config": str(agent), "llm_url": s["llm_url"],
-                 "llm_model": s["llm_model"], "llm_effort": s["llm_effort"], "llm_key": None, "jev_key": None,
-                 "use_cliproxy_key": s["cliproxy"]["key_is_cliproxy"]})
+    ligado = save({"enabled": True, "mode": "package", "agent_config": str(agent), "llm_url": s["llm_url"],
+                   "llm_model": s["llm_model"], "llm_effort": s["llm_effort"], "llm_key": None, "jev_key": None,
+                   "use_cliproxy_key": s["cliproxy"]["key_is_cliproxy"]})
+    ligado["migration_skipped"] = puladas
+    return ligado
 
 
 def list_models(url: str, key: str | None, use_saved_key: bool, use_cliproxy_key: bool) -> list[str]:

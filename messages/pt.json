@@ -395,6 +395,7 @@
   "computer_control_update": "Atualizar para a última versão",
   "computer_control_installing": "Baixando…",
   "computer_control_installed": "Versão {tag} instalada.",
+  "computer_control_migration_skipped": "Estes alvos da pasta local não puderam ser lidos e ficaram de fora: {files}. Confira o arquivo e crie o alvo de novo.",
   "computer_control_enable": "Ativar nas sessões",
   "computer_control_enable_hint": "Desligado, o MCP sai do ~/.claude.json e do de cada conta. Vale para as sessões abertas depois de salvar.",
   "computer_control_dir": "Pasta do projeto",
