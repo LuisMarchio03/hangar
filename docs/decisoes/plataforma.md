@@ -433,6 +433,25 @@ seus prazos, protegendo também os fetches cancelados pela navegação. Eventos 
 substituída não alteram a atual. `pageshow` restaura os streams ao voltar pelo histórico, sem
 apagar marcas de falhas reais.
 
+Em 23/09/2026 o usuário pediu que máquina que já respondeu não passe pela mesma regra. Diário do
+iPhone: o app abriu às 06:19:29 e foi para o segundo plano 1 s depois, antes de as listas
+chegarem; na volta, às 06:19:45, o iOS entregou o erro do socket morto na suspensão 18 ms ANTES do
+`visibilitychange`, e a marca de 30 s gravou. A liberação daquele dia só olhava quem tinha lista
+ao esconder, então não soltou ninguém; fechar e reabrir o app herdava o prazo (restavam 19 s,
+depois 14 s) até conectar em 89 ms às 06:20:23. Agora a última resposta de cada servidor fica
+gravada (`hangar_servidores_responderam`, uma escrita por minuto no máximo). Quem respondeu nas
+últimas 24 h não escala, fica sempre em 30 s, e é liberado na hora quando o app abre com a tela
+à vista ou volta a ficar visível. Recarga em segundo plano continua respeitando o prazo, e a
+máquina sem resposta há mais de 24 h volta à escala inteira.
+
+Na mesma conversa o usuário apontou o resto do defeito: com o app em segundo plano a queda ainda
+contava, marcava offline e cada nova tentativa escondida subia a espera. Falha com o app escondido
+agora não chama `registrarFalha` (o `definirProtegido` cobre também os `fetch`), e a nova tentativa
+escondida sai a cada 30 s fixos, para não martelar máquina desligada com o desktop minimizado.
+O estado de segundo plano vem do evento `visibilitychange`, não do `document.visibilityState`:
+o erro da suspensão chega antes do evento da volta, e só o evento garante que ele ainda cai como
+segundo plano.
+
 **O custo real não era bateria, era a VPN do iPhone.** Com o cabo USB e o `idevicesyslog`, o log de
 dentro do aparelho mostrou a mesma varredura acontecendo na extensão de rede do Tailscale
 (`IPNExtension`), a 13–24 tentativas por minuto, cada uma um `open-conn-track: timeout opening ...

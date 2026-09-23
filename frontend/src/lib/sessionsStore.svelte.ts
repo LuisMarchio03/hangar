@@ -13,7 +13,7 @@ import { navPelaLista } from './navPelaLista';
 import { getIdentificador } from './peers';
 import { ouvirFechamentoNav, podarNavMortos } from './navegadorPanel.svelte';
 import { aggregateSessions, epocasDeRecriacao, jsonlDaSessao, sweepHidden, type Slot, type Aggregate, type Epocas } from '@hangar/core';
-import { avisarSemArmazem, definirArmazem, definirProtegido, estaDesligado, esquecerServidor, onServerRecovered, registrarFalha, registrarSucesso, retentarAgora, retryAfterMs } from '@hangar/core';
+import { avisarSemArmazem, definirArmazem, definirProtegido, estaDesligado, esquecerServidor, onServerRecovered, registrarFalha, registrarSucesso, respondeuRecentemente, retentarAgora, retryAfterMs } from '@hangar/core';
 
 function createSessionsStore() {
   let servers = $state<Server[]>([]);
@@ -48,7 +48,10 @@ function createSessionsStore() {
   // É o que distingue stream vivo de stream ZUMBI na volta do segundo plano.
   const ultimoSinal = new Map<string, number>();
   const SEM_SINAL_MS = 20_000;
-  definirProtegido(() => leavingPage);
+  // Em segundo plano quem derruba a conexão é o aparelho, não a máquina: falha não conta. O iOS
+  // entrega o erro ANTES do `visibilitychange` da volta, por isso o estado vem do evento, não do DOM.
+  let emSegundoPlano = false;
+  definirProtegido(() => leavingPage || emSegundoPlano);
   // O core não toca DOM: o `localStorage` (que faz a marca sobreviver ao recarregamento do PWA)
   // entra por aqui. Indisponível (modo privado), fica só em memória — o core avisa no diário.
   try {
@@ -60,7 +63,8 @@ function createSessionsStore() {
 
   function scheduleRetry(id: string) {
     if (leavingPage || refs === 0) return;
-    const delay = Math.max(1000, retryAfterMs(id));
+    // Em segundo plano não há prazo gravado, mas também não pode martelar máquina desligada.
+    const delay = Math.max(emSegundoPlano ? 30_000 : 1000, retryAfterMs(id));
     const servidor = servers.find((s) => s.id === id);
     if (servidor) registrarDiag({ evento: 'lista.retentativa', tela: 'lista',
       espera_ms: delay, tentativa: tentativas.get(id) ?? 1 }, servidor.baseUrl);
@@ -195,7 +199,7 @@ function createSessionsStore() {
         // Conexão que nunca entregou quadro é o caso da máquina morta atrás da VPN: o socket fica
         // pendurado, o `onerror` nunca vem, e o EventSource reabre sozinho a cada ~3s pra sempre.
         // O `falhou` acima já marcou como desligado; aqui só se fecha o que ficou aberto.
-        if (estaDesligado(s.id)) {
+        if (estaDesligado(s.id) || emSegundoPlano) {
           es.close();
           streams.delete(s.id);
           clearTimeout(watchdogs.get(s.id)); watchdogs.delete(s.id);
@@ -311,27 +315,22 @@ function createSessionsStore() {
     recompute();
   }
 
-  // Quem tinha lista válida quando o app foi pro segundo plano. A suspensão do iOS mata o socket e a
-  // volta registra isso como queda, com prazo persistido; pra quem estava no ar é artefato do
-  // aparelho, e esse prazo não pode segurar a reconexão (celular mostrava tudo offline por minutos).
-  let vivosAoEsconder = new Set<string>();
+  // O iOS mata o socket na suspensão e entrega o erro ANTES de avisar que o app voltou, e fechar o
+  // app deixa esse prazo gravado. Pra máquina que respondeu nas últimas 24 h isso é do aparelho:
+  // quem está olhando a tela ganha a tentativa na hora. Quem não responde há mais tempo espera.
+  function liberarQuemRespondeu(codigo: string) {
+    for (const s of servers) {
+      if (!estaDesligado(s.id) || !respondeuRecentemente(s.id)) continue;
+      registrarDiag({ evento: 'lista.reconectar', tela: 'lista', codigo }, s.baseUrl);
+      retentarAgora(s.id);
+    }
+  }
 
-  // Wake do aparelho (iOS congela timers em background): zera o prazo de quem estava no ar e
-  // reconecta NA HORA. Quem já estava caído antes de esconder segue esperando o prazo dele.
+  // Wake do aparelho (iOS congela timers em background): reconecta NA HORA.
   function onVisibleKick() {
-    if (leavingPage || refs === 0) return;
-    if (document.visibilityState === 'hidden') {
-      vivosAoEsconder = new Set([...slots].filter(([id, slot]) => streams.has(id) && slot.sessions && !slot.error).map(([id]) => id));
-      return;
-    }
-    if (document.visibilityState !== 'visible') return;
-    for (const id of vivosAoEsconder) {
-      const servidor = servers.find((x) => x.id === id);
-      if (servidor && estaDesligado(id)) registrarDiag({ evento: 'lista.reconectar', tela: 'lista',
-        codigo: 'vivo_ao_esconder' }, servidor.baseUrl);
-      retentarAgora(id);
-    }
-    vivosAoEsconder = new Set();
+    emSegundoPlano = document.visibilityState === 'hidden';
+    if (leavingPage || document.visibilityState !== 'visible' || refs === 0) return;
+    liberarQuemRespondeu('respondeu_antes');
     // Stream ZUMBI: o iOS suspende o PWA, o socket morre sem `onerror` e o EventSource continua no
     // mapa — como o `connect` só abre quem NÃO tem stream, ninguém o reabria, e o watchdog que
     // pegaria isso não roda em segundo plano. O app ficava mudo com a rede perfeita até a pessoa
@@ -378,6 +377,7 @@ function createSessionsStore() {
 
   function start() {
     leavingPage = false;
+    emSegundoPlano = document.visibilityState === 'hidden';
     window.addEventListener('beforeunload', onPageExit);
     window.addEventListener('pagehide', onPageExit);
     window.addEventListener('pageshow', onPageShow);
@@ -386,6 +386,8 @@ function createSessionsStore() {
     offRecovered = onServerRecovered((id) => {
       if (refs > 0 && servers.some((s) => s.id === id) && !streams.has(id)) connect(servers, id);
     });
+    // Só com a tela à vista: o iOS também recarrega o PWA em segundo plano, e ali o prazo vale.
+    if (document.visibilityState === 'visible') liberarQuemRespondeu('app_abriu');
     connect(servers);
     offChanged = onServersChanged(() => { servers = listServers(); connect(servers); });
     document.addEventListener('visibilitychange', onVisibleKick);

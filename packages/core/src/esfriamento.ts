@@ -2,11 +2,16 @@
 import { registrar as registrarDiag } from './diag';
 
 const CHAVE = 'hangar_servidores_desligados';
+const CHAVE_RESPOSTAS = 'hangar_servidores_responderam';
 
 type Estado = { failures: number; retryAt: number };
 const RETRY_DELAYS_MS = [30_000, 60_000, 120_000, 240_000, 300_000, 600_000, 1_800_000];
+// Máquina que respondeu há menos disto está ligada: a falha dela vem do aparelho (o iOS mata o
+// socket na suspensão, a VPN demora a acordar), então a espera não escala.
+const RESPONDEU_RECENTE_MS = 24 * 60 * 60_000;
 
 const estados = new Map<string, Estado>();
+const respostas = new Map<string, number>();
 let carregado = false;
 let avisouArmazem = false;
 const recoveredListeners = new Set<(id: string) => void>();
@@ -37,9 +42,10 @@ export function definirArmazem(a: ArmazemEsfriamento | null): void {
   carregado = false;   // armazém novo, estado gravado novo
   // Marca feita ANTES da injeção (só em memória) não pode se perder: funde com o que está
   // gravado e persiste — `registrarFalha` só grava na transição, não gravaria de novo.
-  if (estados.size > 0) {
+  if (estados.size > 0 || respostas.size > 0) {
     carregar();
     gravar();
+    gravarRespostas();
   }
 }
 
@@ -47,9 +53,38 @@ function armazem(): ArmazemEsfriamento | null {
   return armazemAtual;
 }
 
+function carregarRespostas(): void {
+  let bruto: string | null | undefined;
+  try {
+    bruto = armazem()?.getItem(CHAVE_RESPOSTAS);
+  } catch (e) {
+    avisarSemArmazem(e);
+    return;
+  }
+  if (!bruto) return;
+  try {
+    const saved: unknown = JSON.parse(bruto);
+    if (!saved || typeof saved !== 'object') return;
+    for (const [id, em] of Object.entries(saved)) {
+      if (typeof em === 'number' && Number.isFinite(em) && em > (respostas.get(id) ?? 0)) respostas.set(id, em);
+    }
+  } catch (e) {
+    registrarDiag({ evento: 'esfriamento.estado_invalido', nivel: 'aviso', detalhe: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+function gravarRespostas(): void {
+  try {
+    armazem()?.setItem(CHAVE_RESPOSTAS, JSON.stringify(Object.fromEntries(respostas)));
+  } catch (e) {
+    avisarSemArmazem(e);
+  }
+}
+
 function carregar(): void {
   if (carregado) return;
   carregado = true;
+  carregarRespostas();
   let bruto: string | null | undefined;
   try {
     bruto = armazem()?.getItem(CHAVE);
@@ -112,11 +147,19 @@ export function retryAfterMs(id: string): number {
   return Math.max(0, (estados.get(id)?.retryAt ?? 0) - Date.now());
 }
 
+/** Respondeu nas últimas 24 h: a falha é do aparelho, não da máquina. */
+export function respondeuRecentemente(id: string): boolean {
+  carregar();
+  const em = respostas.get(id);
+  return em !== undefined && Date.now() - em < RESPONDEU_RECENTE_MS;
+}
+
 /** Falhas simultâneas não renovam o prazo; nova tentativa frustrada aumenta a espera. */
 export function registrarFalha(id: string): void {
   carregar();
   if (protegido(id) || retryAfterMs(id) > 0) return;
-  const failures = Math.min((estados.get(id)?.failures ?? 0) + 1, RETRY_DELAYS_MS.length);
+  const failures = respondeuRecentemente(id) ? 1
+    : Math.min((estados.get(id)?.failures ?? 0) + 1, RETRY_DELAYS_MS.length);
   estados.set(id, { failures, retryAt: Date.now() + RETRY_DELAYS_MS[failures - 1] });
   gravar();
 }
@@ -124,6 +167,12 @@ export function registrarFalha(id: string): void {
 /** Respondeu: está de pé. */
 export function registrarSucesso(id: string): void {
   carregar();
+  // Toda resposta passa por aqui, inclusive o ping de 8 s: grava no máximo uma vez por minuto.
+  const agora = Date.now();
+  if (agora - (respostas.get(id) ?? 0) > 60_000) {
+    respostas.set(id, agora);
+    gravarRespostas();
+  }
   if (!estados.delete(id)) return;
   gravar();
   for (const listener of [...recoveredListeners]) {
@@ -146,13 +195,16 @@ export function retentarAgora(id?: string): void {
 export function esquecerServidor(id: string): void {
   carregar();
   if (estados.delete(id)) gravar();
+  if (respostas.delete(id)) gravarRespostas();
 }
 
 export function _limparEsfriamentoParaTestes(): void {
   estados.clear();
+  respostas.clear();
   carregado = false;
   try {
     armazem()?.removeItem(CHAVE);
+    armazem()?.removeItem(CHAVE_RESPOSTAS);
   } catch {
     /* sem armazém nos testes de nó */
   }

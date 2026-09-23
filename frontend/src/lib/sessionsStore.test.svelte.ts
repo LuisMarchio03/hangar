@@ -163,25 +163,54 @@ it.each(['vpn', undefined])('buscarAgora(%s) reabre o produtor com erro sem inte
   expect(sessionsStore.rows.some(s => s.name === 'recovered')).toBe(true);
 });
 
-it('voltar do segundo plano reconecta na hora quem estava no ar; quem já caíra espera o prazo', () => {
+it('em segundo plano a queda não marca offline e a nova tentativa não aumenta a espera', () => {
   vi.useFakeTimers();
   sessionsStore.retain();
-  streams.get('lan')!.get('sessions')!({ data: '[]' });
-  objetos.get('vpn')!.onerror!();   // já estava caído antes de esconder
+  const visibilidade = vi.spyOn(document, 'visibilityState', 'get');
+  visibilidade.mockReturnValue('hidden');
+  document.dispatchEvent(new Event('visibilitychange'));
+  for (let i = 0; i < 3; i++) {
+    const antes = objetos.get('vpn');
+    antes!.onerror!();
+    expect(estaDesligado('vpn')).toBe(false);
+    vi.advanceTimersByTime(29999);
+    expect(objetos.get('vpn')).toBe(antes);
+    vi.advanceTimersByTime(1);
+    expect(objetos.get('vpn')).not.toBe(antes);
+  }
+  visibilidade.mockRestore();
+});
+
+it('voltar do segundo plano reconecta na hora; quem caiu com a tela à vista e nunca respondeu espera o prazo', () => {
+  vi.useFakeTimers();
+  sessionsStore.retain();
+  objetos.get('vpn')!.onerror!();   // caiu com a tela à vista: conta
   const vpnCaido = objetos.get('vpn');
   const visibilidade = vi.spyOn(document, 'visibilityState', 'get');
   visibilidade.mockReturnValue('hidden');
   document.dispatchEvent(new Event('visibilitychange'));
+  streams.get('lan')!.get('sessions')!({ data: '[]' });   // a lista chegou com o app já escondido
   const lanAntigo = objetos.get('lan');
-  lanAntigo!.onerror!();            // a suspensão matou o socket
-  expect(estaDesligado('lan')).toBe(true);
   visibilidade.mockReturnValue('visible');
-  document.dispatchEvent(new Event('visibilitychange'));
+  lanAntigo!.onerror!();            // o iOS entrega o erro da suspensão antes do evento da volta
   expect(estaDesligado('lan')).toBe(false);
+  document.dispatchEvent(new Event('visibilitychange'));
   expect(objetos.get('lan')).not.toBe(lanAntigo);
   expect(estaDesligado('vpn')).toBe(true);
   expect(objetos.get('vpn')).toBe(vpnCaido);
   visibilidade.mockRestore();
+});
+
+it('reabrir o app tenta na hora quem respondeu antes, mesmo com prazo gravado', () => {
+  vi.useFakeTimers();
+  registrarSucesso('lan');
+  registrarFalha('lan');   // a suspensão derrubou antes de o app ser fechado
+  registrarFalha('vpn');   // nunca respondeu
+  sessionsStore.retain();
+  expect(estaDesligado('lan')).toBe(false);
+  expect(objetos.has('lan')).toBe(true);
+  expect(estaDesligado('vpn')).toBe(true);
+  expect(objetos.has('vpn')).toBe(false);
 });
 
 it('retoma automaticamente após o prazo, mantendo offline até uma resposta válida', () => {

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   definirArmazem, definirProtegido, estaDesligado, esquecerServidor, registrarFalha, registrarSucesso, retentarAgora,
   _limparEsfriamentoParaTestes,
-  onServerRecovered, retryAfterMs,
+  onServerRecovered, respondeuRecentemente, retryAfterMs,
 } from './esfriamento';
 
 beforeEach(() => { _limparEsfriamentoParaTestes(); definirProtegido(() => false); });
@@ -49,6 +49,38 @@ describe('servidor desligado', () => {
     registrarSucesso('pc');
     registrarFalha('pc');
     expect(retryAfterMs('pc')).toBe(30000);
+  });
+
+  it('quem respondeu nas últimas 24 h não escala; passado isso, a escala volta', () => {
+    vi.useFakeTimers();
+    registrarSucesso('pc');
+    for (let i = 0; i < 3; i++) {
+      registrarFalha('pc');
+      expect(retryAfterMs('pc')).toBe(30000);
+      vi.advanceTimersByTime(30000);
+    }
+    vi.advanceTimersByTime(24 * 60 * 60_000);
+    registrarFalha('pc');
+    expect(retryAfterMs('pc')).toBe(60000);
+  });
+
+  it('a lembrança de quem respondeu sobrevive ao recarregamento', () => {
+    const guardado = new Map<string, string>();
+    definirArmazem({
+      getItem: (k: string) => guardado.get(k) ?? null,
+      setItem: (k: string, v: string) => void guardado.set(k, v),
+      removeItem: (k: string) => void guardado.delete(k),
+    });
+    try {
+      registrarSucesso('pc');
+      const salvo = guardado.get('hangar_servidores_responderam')!;
+      _limparEsfriamentoParaTestes();
+      guardado.set('hangar_servidores_responderam', salvo);
+      expect(respondeuRecentemente('pc')).toBe(true);
+      expect(respondeuRecentemente('outro')).toBe(false);
+    } finally {
+      definirArmazem(null);
+    }
   });
 
   it('respondeu: sai da lista', () => {

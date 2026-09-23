@@ -321,6 +321,10 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   Prazo e contagem são persistidos para sobreviver à recarga.
   Só uma resposta confirma a recuperação; expirar o prazo apenas permite nova tentativa.
   Erro HTTP e cancelamento da página não são queda de rede. Reconectar permite tentar antes.
+  Quem respondeu nas últimas 24 h não escala (fica em 30 s) e é tentado na hora quando o app
+  abre ou volta a ficar visível: a queda dele é a suspensão do aparelho, não a máquina.
+  Falha com o app em segundo plano não conta (nem marca nem grava prazo): tenta a cada 30 s
+  fixos e reconecta todos na volta.
 - **Revisão de código:** neste repositório, revisão local e as verificações do projeto.
 - **MCP `hangar` (`/mcp`): identidade do chamador vai no cabeçalho e o backend resolve.** Chave
   vence pane, pane vence nome, pane ambíguo não resolve, nada resolvido é erro (nunca `cli`). O
