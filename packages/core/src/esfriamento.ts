@@ -69,7 +69,8 @@ function carregarRespostas(): void {
       if (typeof em === 'number' && Number.isFinite(em) && em > (respostas.get(id) ?? 0)) respostas.set(id, em);
     }
   } catch (e) {
-    registrarDiag({ evento: 'esfriamento.estado_invalido', nivel: 'aviso', detalhe: e instanceof Error ? e.message : String(e) });
+    registrarDiag({ evento: 'esfriamento.estado_invalido', nivel: 'aviso', codigo: 'responderam',
+      detalhe: e instanceof Error ? e.message : String(e) });
   }
 }
 

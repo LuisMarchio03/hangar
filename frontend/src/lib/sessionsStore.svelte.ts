@@ -50,7 +50,10 @@ function createSessionsStore() {
   const SEM_SINAL_MS = 20_000;
   // Em segundo plano quem derruba a conexão é o aparelho, não a máquina: falha não conta. O iOS
   // entrega o erro ANTES do `visibilitychange` da volta, por isso o estado vem do evento, não do DOM.
-  let emSegundoPlano = false;
+  // Ouvinte fora do retain/release: o `protegido` vale pra todo fetch do app, inclusive com a lista
+  // desmontada (conversa aberta no celular).
+  let emSegundoPlano = globalThis.document?.visibilityState === 'hidden';
+  globalThis.document?.addEventListener('visibilitychange', () => { emSegundoPlano = document.visibilityState === 'hidden'; });
   definirProtegido(() => leavingPage || emSegundoPlano);
   // O core não toca DOM: o `localStorage` (que faz a marca sobreviver ao recarregamento do PWA)
   // entra por aqui. Indisponível (modo privado), fica só em memória — o core avisa no diário.
@@ -328,7 +331,6 @@ function createSessionsStore() {
 
   // Wake do aparelho (iOS congela timers em background): reconecta NA HORA.
   function onVisibleKick() {
-    emSegundoPlano = document.visibilityState === 'hidden';
     if (leavingPage || document.visibilityState !== 'visible' || refs === 0) return;
     liberarQuemRespondeu('respondeu_antes');
     // Stream ZUMBI: o iOS suspende o PWA, o socket morre sem `onerror` e o EventSource continua no
