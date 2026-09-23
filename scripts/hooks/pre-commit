@@ -100,14 +100,23 @@ relatar() {   # $1 = rótulo, $2 = linhas casadas
     (( n > 5 )) && printf '    … e mais %d linha(s)\n' $(( n - 5 ))
 }
 
+# grep sai 1 sem achado e 2+ quando FALHA. Tratar os dois igual (o antigo `|| true`) deixava uma
+# varredura quebrada passar como limpa, e trava que falha calada é pior que trava nenhuma.
+casar() {   # $1 = opções do grep, $2 = regex; preenche `casadas`
+    local rc
+    casadas="$(printf '%s\n' "$adicionado" | grep "$1" -- "$2")"; rc=$?
+    if (( rc >= 2 )); then
+        echo "pre-commit: a varredura falhou (grep saiu com $rc) no padrão: $2" >&2
+        exit 1
+    fi
+}
+
 for entrada in "${PADROES[@]}"; do
-    rotulo="${entrada%%::*}"
-    regex="${entrada#*::}"
-    casadas="$(printf '%s\n' "$adicionado" | grep -Ei "$regex" || true)"
-    [[ -n "$casadas" ]] && relatar "$rotulo" "$casadas"
+    casar -Ei "${entrada#*::}"
+    [[ -n "$casadas" ]] && relatar "${entrada%%::*}" "$casadas"
 done
 
-casadas="$(printf '%s\n' "$adicionado" | grep -E "$PADRAO_TAILNET" || true)"
+casar -E "$PADRAO_TAILNET"
 [[ -n "$casadas" ]] && relatar "IP da tailnet (endereço real de máquina)" "$casadas"
 
 if (( achou )); then
