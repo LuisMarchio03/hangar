@@ -2834,27 +2834,6 @@ def _nome_ocupado(nome: str) -> bool:
     return tmux.has_session(nome) or codex_sessions.exists(nome) or headless_sessions.exists(nome)
 
 
-def _cwd_do_processo(nome: str) -> str | None:
-    """Pasta onde o processo da sessão sem terminal está agora. Renomear a pasta com a sessão viva
-    não tira o processo dela, e o /proc mostra o nome novo; o registro guarda o de quando nasceu."""
-    from app.adapters.codex import sessions as codex_sessions
-    for meta in (headless_sessions.load(nome), codex_sessions.load(nome)):
-        pid = ((meta or {}).get("cano") or {}).get("pid")
-        chave = (meta or {}).get("key") or ""
-        if not pid or not chave:
-            continue
-        try:
-            with open(f"/proc/{pid}/cmdline", "rb") as fh:
-                if chave[:16].encode() not in fh.read():
-                    continue   # pid reaproveitado por outro processo
-            cwd = os.readlink(f"/proc/{pid}/cwd")
-        except OSError:
-            continue
-        if os.path.isdir(cwd):
-            return cwd
-    return None
-
-
 def _bastao_preparar(info: SessionInfo, origem: str, destino: str,
                      por_modelo: bool = False) -> tuple[str, Path, str, str | None]:
     _passo(destino, "resumo")
@@ -2971,13 +2950,8 @@ async def _passar_bastao(name: str, body: BastaoBody):
         raise HTTPException(400, detail=erro("erro_bastao_sem_cwd",
                                              "a sessão de origem não tem diretório conhecido; "
                                              "escolha o cwd da sessão nova"))
-    # O registro guarda a pasta de quando a origem nasceu; renomeada depois, o processo vivo segue
-    # na pasta nova. Sem processo pra perguntar, recusa antes de gravar o dossiê.
-    if not await asyncio.to_thread(os.path.isdir, os.path.expanduser(cwd)) and not body.cwd:
-        vivo = await asyncio.to_thread(_cwd_do_processo, name)
-        if vivo:
-            _log.info("bastao: pasta de %s mudou de %s para %s; a sessão nova nasce na atual", name, cwd, vivo)
-            cwd = vivo
+    # Pasta renomeada/movida com a origem morta (viva, o registry já devolve a atual): recusa antes
+    # de gravar o dossiê.
     if not await asyncio.to_thread(os.path.isdir, os.path.expanduser(cwd)):
         raise HTTPException(400, detail=erro("erro_bastao_cwd_inexistente",
                                              f"a pasta {cwd} não existe mais; se ela foi renomeada "

@@ -126,6 +126,25 @@ def sanitize_cwd(cwd: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "-", limpo)
 
 
+def cwd_atual(meta: dict) -> str | None:
+    """Pasta de uma sessão sem terminal. Renomeada com a sessão viva, o caminho gravado aponta pro
+    nada, mas o processo continua dentro dela e o /proc mostra o nome novo. O transcript segue no
+    caminho gravado: é por ele que o Claude indexa a conversa."""
+    cwd = meta.get("cwd")
+    pid = (meta.get("cano") or {}).get("pid")
+    chave = meta.get("key") or ""
+    if not cwd or os.path.isdir(cwd) or not pid or not chave:
+        return cwd
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            if chave[:16].encode() not in fh.read():
+                return cwd   # pid reaproveitado por outro processo
+        vivo = os.readlink(f"/proc/{pid}/cwd")
+    except OSError:
+        return cwd
+    return vivo if os.path.isdir(vivo) else cwd
+
+
 _pretrust_lock = threading.Lock()
 
 
@@ -1252,9 +1271,10 @@ class SessionRegistry:
         for meta in codex_sessions.list_all():
             codex_home = str(Path(meta.get("codex_home") or codex_contas.default_home())
                              .expanduser().resolve(strict=False))
-            br, wt = head_info(meta.get("cwd"))
+            cwd = cwd_atual(meta)
+            br, wt = head_info(cwd)
             out.append(SessionInfo(
-                name=meta["name"], cwd=meta.get("cwd"), jsonl=meta.get("rollout_path") or None,
+                name=meta["name"], cwd=cwd, jsonl=meta.get("rollout_path") or None,
                 provider="codex", tracked=True, conta=f"codex:{codex_home}",
                 codex_home=codex_home, headless=bool(meta.get("headless")),
                 branch=br, worktree=wt,
@@ -1268,10 +1288,11 @@ class SessionRegistry:
         from app.adapters import get_adapter, CLAUDE_HEADLESS
         hl = get_adapter(CLAUDE_HEADLESS)
         for meta in headless_sessions.list_all():
-            br, wt = head_info(meta.get("cwd"))
+            cwd = cwd_atual(meta)
+            br, wt = head_info(cwd)
             cdir = meta.get("config_dir")
             out.append(SessionInfo(
-                name=meta["name"], cwd=meta.get("cwd"), jsonl=hl.transcript_path_de(meta),
+                name=meta["name"], cwd=cwd, jsonl=hl.transcript_path_de(meta),
                 provider="claude", headless=True, tracked=True, engine=meta.get("engine"),
                 conta=f"claude:{Path(cdir or Path.home() / '.claude').resolve()}",
                 branch=br, worktree=wt,
