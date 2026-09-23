@@ -158,6 +158,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   suspender: `continue` ali vira laço quente que não cede o event loop nem aceita cancel, e cada
   relevantada empilha frames no MESMO traceback, então o `logger.exception` custa quadrático.
   Leitura e processamento vão em `try` separados.
+- **Progresso de MCP no Claude sem terminal vem de arquivo, não do stream.** O MCP grava cada
+  etapa em `~/.hangar/tool-progress/<tool_use_id>.jsonl` (`{"t", "message"}` por linha; o id chega
+  no `_meta` da chamada como `claudecode/toolUseId`) e o cartão aberto lê por
+  `GET /api/sessions/{name}/tool-progress/{id}` a cada 2 s enquanto roda. A saída parcial do Bash
+  vem do `tasks/<id>.output` do Claude Code, achado pelo processo (`procinfo.saida_de_comando`). Ver
+  [Progresso de MCP](#progresso-de-mcp-no-claude-sem-terminal).
 
 ## Codex: compactação e ida ao terminal
 
@@ -1754,3 +1760,34 @@ nenhum. Achar a causa dependeu de outra sessão ler o `settings.json` da conta.
 
 **O que o aviso NÃO pega.** Falha engolida dentro do script (`state_hook.py` e `nav_hook.py`
 embrulham tudo em `except` e saem com 0). O aviso cobre script sumido, Python sumido e crash.
+
+## Progresso de MCP no Claude sem terminal
+
+Em 23/09/2026 o usuário notou que, sem terminal, uma chamada longa de MCP (o `objetivo` do
+`hangar-computer-control`, 7 min) só mostrava "Executando…". A suspeita era o adapter perder o
+progresso; não perde. Prova com um MCP descartável que chama `report_progress` três vezes, rodado
+no `claude -p` 2.1.280 com as mesmas opções do adapter (`stream-json` nos dois sentidos,
+`--verbose`, `--include-partial-messages`): o Claude pede o progresso (`progress_token` e
+`claudecode/toolUseId` no `_meta`), o MCP manda, e o stdout traz zero `tool_progress`. No binário,
+o conversor para o stream repassa `bash_progress`, `tool_heartbeat` (só segundos decorridos),
+`repl_tool_call` e `agent_api_retry`; `mcp_progress` fica só na TUI. Também não entra no `.jsonl`
+da conversa. O `bash_progress` também não sai no stream: o conversor só o repassa com
+`CLAUDE_CODE_REMOTE` ou `CLAUDE_CODE_CONTAINER_ID` no ambiente.
+
+A saída parcial do Bash existe em disco: o Claude Code redireciona o comando para
+`<tmp>/claude-<uid>/<pasta>/<sessão>/tasks/<id>.output` (no Windows,
+`%TEMP%\claude\<pasta>\<sessão>\tasks\<id>.output`) e apaga o arquivo no fim. O nome não traz o id
+da chamada, então `procinfo.saida_de_comando` liga pelo processo: a saída dele aponta para o
+arquivo e a linha de comando traz o comando no `eval '…' < /dev/null` (o `_comando_pedido` de
+sempre). Comando igual ao do cartão = arquivo certo. Vale com e sem terminal. No Linux lê
+`/proc/<pid>/fd/1`; fora dele, `psutil.open_files()` só no processo que casou pela linha de
+comando — medido na VM Windows (Git Bash): 7–57 ms por leitura, saída ao vivo linha a linha.
+Na DELPHI-02 o `%TEMP%` é curto (`ADMINI~1`) e o Claude põe o sufixo do comando entre aspas
+(`pwd -P >| '/c/Users/ADMINI~1/…'`); o `_comando_pedido` cortava na última aspa da linha e
+levava o sufixo junto, então nada casava. Agora ele lê o `eval '…'` como string de shell (aspa
+fecha; `'"'"'` e `'\''` são aspa escapada). Medido lá depois da troca: 10 leituras ao vivo, ~40 ms.
+
+Por isso o canal é um arquivo por chamada, gravado pelo próprio MCP, com o `toolUseId` validado
+por regex dos dois lados (é nome de arquivo). O `hangar-computer-control` foi o primeiro a gravar;
+qualquer MCP nosso pode seguir o mesmo formato. Os arquivos não são apagados: são poucos bytes por
+chamada. Se a pasta crescer a ponto de pesar, a faxina é apagar os mais velhos que alguns dias.

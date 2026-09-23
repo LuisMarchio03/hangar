@@ -4703,6 +4703,44 @@ async def historico_lateral(name: str):
     return await asyncio.to_thread(btw.historico, name)
 
 
+_TOOL_USE_ID = re.compile(r"^toolu_[A-Za-z0-9_-]{1,80}$")
+
+
+def _etapas_da_ferramenta(tool_use_id: str) -> list[dict]:
+    # O Claude sem terminal não repassa o progresso do MCP; o MCP grava as etapas aqui por conta própria.
+    arquivo = Path.home() / ".hangar" / "tool-progress" / f"{tool_use_id}.jsonl"
+    etapas = []
+    try:
+        linhas = arquivo.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return etapas
+    for linha in linhas[-200:]:
+        try:
+            item = json.loads(linha)
+        except ValueError:
+            continue
+        if isinstance(item, dict) and isinstance(item.get("message"), str):
+            etapas.append({"t": item.get("t"), "message": item["message"][:500]})
+    return etapas
+
+
+class BashOutputBody(_StrictBody):
+    command: str = Field(max_length=200_000)
+
+
+# POST porque o comando vai inteiro no corpo: numa URL ele estoura o limite com heredoc.
+@app.post("/api/sessions/{name}/bash-output", dependencies=[Depends(require_auth)])
+async def bash_output(name: str, body: BashOutputBody):
+    return {"text": await asyncio.to_thread(procinfo.saida_de_comando, body.command)}
+
+
+@app.get("/api/sessions/{name}/tool-progress/{tool_use_id}", dependencies=[Depends(require_auth)])
+async def tool_progress(name: str, tool_use_id: str):
+    if not _TOOL_USE_ID.match(tool_use_id):
+        raise HTTPException(400, detail="invalid tool_use_id")
+    return await asyncio.to_thread(_etapas_da_ferramenta, tool_use_id)
+
+
 def _normalize_rate_window(window: dict | None) -> dict | None:
     # RateLimitWindow (app-server) -> shape neutro do front: usedPercent/windowMins/resetsAt.
     # window None (secondary/credits costumam vir null) -> None, o front so mostra o que existe.

@@ -456,7 +456,7 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
                         kind="tool_result", id=_sub_id(uid, k),
                         tool_use_id=tr.get("tool_use_id"),
                         result=str(res) if res is not None else None,
-                        is_error=bool(tr.get("is_error", False)),
+                        is_error=bool(tr.get("is_error", False)), ts=_ts(obj),
                     ))
                 return out
             # Imagens coladas no terminal: contar os blocos `image` -> o front busca cada uma lazy.

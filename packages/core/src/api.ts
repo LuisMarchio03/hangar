@@ -2021,6 +2021,22 @@ export async function historicoLateral(name: string): Promise<PerguntaLateral[]>
   return apiFetch<PerguntaLateral[]>(`/api/sessions/${encodeURIComponent(name)}/btw`);
 }
 
+export interface EtapaFerramenta { t: number | null; message: string }
+
+/** Saída parcial de um Bash ainda rodando; `null` quando o comando não está (mais) em execução. */
+export async function getBashOutput(name: string, command: string): Promise<string | null> {
+  const r = await apiFetch<{ text: string | null }>(`/api/sessions/${encodeURIComponent(name)}/bash-output`, {
+    method: 'POST',
+    body: JSON.stringify({ command }),
+  });
+  return r.text;
+}
+
+export async function getToolProgress(name: string, toolUseId: string): Promise<EtapaFerramenta[]> {
+  return apiFetch<EtapaFerramenta[]>(
+    `/api/sessions/${encodeURIComponent(name)}/tool-progress/${encodeURIComponent(toolUseId)}`);
+}
+
 // Espelho do pane (overlays so-TUI): le o pane cru e manda teclas de navegacao (allowlist no backend).
 export type NavKey =
   | 'Up' | 'Down' | 'Left' | 'Right'

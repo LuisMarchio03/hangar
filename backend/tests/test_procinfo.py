@@ -335,6 +335,11 @@ def test_comando_pedido_tira_o_prologo_do_shell():
     bg = "/usr/bin/zsh -c source /snap.sh || true && eval 'sleep 300; echo fim' > /tmp/b.output 2>&1"
     assert procinfo._comando_pedido(bg) == "sleep 300; echo fim"
 
+    # Windows com %TEMP% curto: o sufixo vem ENTRE aspas e não pode entrar no comando.
+    win = ("bash.exe -c source /c/s.sh || true && eval 'echo \"it'\"'\"'s x\"; sleep 2' < /dev/null "
+           "&& pwd -P >| '/c/Users/ADMINI~1/AppData/Local/Temp/claude-0edc-cwd'")
+    assert procinfo._comando_pedido(win) == "echo \"it's x\"; sleep 2"
+
 
 def test_shells_de_lista_shell_filho_e_ignora_o_que_nao_e_shell():
     """So comando do agente entra: ele sempre nasce num shell.
@@ -383,3 +388,34 @@ def test_descendant_pids_mapa_com_anel_termina():
 
     auto_loop = {0: [0, 4], 4: [9]}          # System Idle e pai dele mesmo no Windows
     assert sorted(procinfo._descendant_pids(0, auto_loop)) == [0, 4, 9]
+
+
+def _bash_do_claude(tmp_path, comando):
+    """Um shell no formato em que o Claude Code roda o Bash: prólogo, `eval '...'`, saída em tasks/."""
+    import subprocess
+    import time
+    tarefas = tmp_path / "claude-teste" / "pasta" / "sessao" / "tasks"
+    tarefas.mkdir(parents=True)
+    escapado = comando.replace("'", """'"'"'""")
+    script = f"true && eval '{escapado}' < /dev/null && pwd -P >| /dev/null"
+    with open(tarefas / "t1.output", "wb") as saida:
+        proc = subprocess.Popen(["bash", "-c", script], stdout=saida, stderr=saida)
+    time.sleep(0.6)
+    return proc
+
+
+@pytest.mark.parametrize("ramo", ["proc", "psutil"])
+def test_saida_de_comando_acha_o_bash_pelo_eval(tmp_path, monkeypatch, ramo):
+    if ramo == "proc" and not procinfo._TEM_PROC:
+        pytest.skip("exercita o ramo /proc")
+    if ramo == "psutil":
+        monkeypatch.setattr(procinfo, "psutil", psutil, raising=False)
+        monkeypatch.setattr(procinfo, "_TEM_PROC", False)
+    comando = "echo \"it's vivo\"; sleep 3"
+    proc = _bash_do_claude(tmp_path, comando)
+    try:
+        assert procinfo.saida_de_comando(comando) == "it's vivo\n"
+        assert procinfo.saida_de_comando("outro comando") is None
+    finally:
+        proc.kill()
+        proc.wait()

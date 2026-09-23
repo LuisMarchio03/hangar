@@ -17,7 +17,6 @@ arquivo, um namespace, um alvo de patch.
 """
 import logging
 import os
-import re
 import threading
 import time
 from pathlib import Path
@@ -462,12 +461,13 @@ def _start_time_psutil(pid: int) -> Optional[float]:
 # O Claude Code roda cada Bash num shell que carrega um prologo (snapshot do ambiente, guardas de
 # glob) antes do comando de verdade, que vai dentro de um `eval '...'`. Mostrar a linha inteira
 # enche a tela de prologo; o que interessa e o que foi pedido.
-# Ancorado no `&& eval '` do PROLOGO (a primeira ocorrencia: o prologo vem antes do comando), e o
-# corte e na ultima aspa seguida de espaco ou fim — o sufixo varia (`< /dev/null`, redirecionamento
-# do background, `&& pwd -P`). Sem a ancora, um comando cujo TEXTO contenha `eval '` era cortado no
-# meio e o chip mostrava um pedaco sem sentido.
-# Limite conhecido: sufixo com aspas (redirecionar pra caminho entre aspas) entra no texto exibido.
-_EVAL_RE = re.compile(r"&& eval '(.*)'(?:\s|$)", re.DOTALL)
+# Ancorado no `&& eval '` do PROLOGO (a primeira ocorrencia: o prologo vem antes do comando). Sem a
+# ancora, um comando cujo TEXTO contenha `eval '` era cortado no meio.
+# O fim e lido como string de shell (aspa simples fecha; `'"'"'` e `'\''` sao aspa escapada), nao
+# pela ultima aspa da linha: no Windows com %TEMP% curto (ADMINI~1) o sufixo vem entre aspas
+# (`pwd -P >| '/c/Users/ADMINI~1/...'`) e o corte guloso levava ele junto.
+_EVAL_INICIO = "&& eval '"
+_ASPA_ESCAPADA = ("""'"'"'""", "'\\''")
 
 # Filhos que NAO sao comando do agente: servidor MCP em stdio, hook e a propria statusline nascem
 # como filhos diretos do processo e apareciam no chip como "comando ainda rodando" — a statusline,
@@ -477,11 +477,23 @@ _SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "fish"}
 
 
 def _comando_pedido(bruto: str) -> str:
-    m = _EVAL_RE.search(bruto)
-    if not m:
+    i = bruto.find(_EVAL_INICIO)
+    if i < 0:
         return bruto.strip()
-    # O shell escapa aspas simples do comando como '"'"' — desfaz pra ler como a pessoa escreveu.
-    return m.group(1).replace("""'"'"'""", "'").strip()
+    j = i + len(_EVAL_INICIO)
+    partes: list[str] = []
+    while True:
+        k = bruto.find("'", j)
+        if k < 0:
+            partes.append(bruto[j:])
+            break
+        partes.append(bruto[:k][j:])
+        esc = next((e for e in _ASPA_ESCAPADA if bruto.startswith(e, k)), None)
+        if esc is None:
+            break
+        partes.append("'")
+        j = k + len(esc)
+    return "".join(partes).strip()
 
 
 def shells_de(pid: int) -> list[dict]:
@@ -509,6 +521,68 @@ def shells_de(pid: int) -> list[dict]:
             continue
         out.append({"pid": f, "cmd": cmd, "desde": _proc_start_time(f)})
     return out
+
+
+def _e_saida_de_tarefa(caminho: str) -> bool:
+    # `<tmp>/claude-<uid>/…/tasks/<id>.output` no Linux, `%TEMP%\claude\…\tasks\<id>.output` no Windows.
+    p = Path(caminho)
+    return p.suffix == ".output" and p.parent.name == "tasks" and any(
+        parte.startswith("claude") for parte in p.parts)
+
+
+def _arquivo_da_saida(alvo: str) -> Optional[str]:
+    if not _TEM_PROC:
+        # A varredura por cmdline é barata; `open_files()` só roda no processo que casou (medido na
+        # VM Windows: 20-40 ms), nunca na lista inteira.
+        try:
+            for proc in psutil.process_iter(attrs=["pid", "cmdline"]):
+                argv = proc.info.get("cmdline")
+                if not argv or _comando_pedido(" ".join(argv)) != alvo:
+                    continue
+                try:
+                    for f in proc.open_files():
+                        if _e_saida_de_tarefa(f.path):
+                            return f.path
+                except psutil.Error:
+                    continue
+        except psutil.Error:
+            return None
+        return None
+    try:
+        entradas = os.listdir(_PROC_ROOT)
+    except OSError:
+        return None
+    for entrada in entradas:
+        if not entrada.isdigit():
+            continue
+        try:
+            destino = os.readlink(f"{_PROC_ROOT}/{entrada}/fd/1")
+        except OSError:
+            continue
+        if _e_saida_de_tarefa(destino) and _comando_pedido(_cmdline(int(entrada))) == alvo:
+            return destino
+    return None
+
+
+def saida_de_comando(comando: str, teto: int = 16_000) -> Optional[str]:
+    """Últimos bytes da saída de um Bash do Claude Code ainda rodando; None se não está rodando.
+
+    O Claude Code manda a saída do comando para `tasks/<id>.output` e apaga o arquivo no fim. O
+    nome não traz o id da chamada: quem liga os dois é o processo, que escreve no arquivo e traz o
+    comando no `eval '...'` da própria linha de comando.
+    """
+    alvo = comando.strip()
+    if not alvo:
+        return None
+    arquivo = _arquivo_da_saida(alvo)
+    if not arquivo:
+        return None
+    try:
+        with open(arquivo, "rb") as f:
+            f.seek(max(0, os.fstat(f.fileno()).st_size - teto))
+            return f.read().decode("utf-8", "replace")
+    except OSError:
+        return None
 
 
 def _e_shell(pid: int) -> bool:
