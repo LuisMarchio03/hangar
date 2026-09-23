@@ -415,6 +415,10 @@ print(home + "\t" + achada)' "$configs" "$conta")
         }
         IFS=$'\t' read -r config_dir conta < <(python3 -c 'import json,sys
 s = json.load(sys.stdin); print(s["path"] + "\t" + s["label"])' <<<"$sugestao")
+        if [[ -z "$config_dir" || -z "$conta" ]]; then
+            echo "erro: resposta da cota ilegível em $BASE — escolha uma conta: --conta <nome>" >&2
+            exit 2
+        fi
         echo "conta escolhida pela cota: $conta" >&2
     fi
     if [[ -n "$conta" && "$config_dir" == "" ]]; then
