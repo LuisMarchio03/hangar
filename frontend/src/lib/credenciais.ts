@@ -179,6 +179,7 @@ export function consertarHarness(alvo: Server | null, conserto: string): Promise
 export interface ComputerControlTarget { name: string; path: string; transport: string; host: string }
 
 export interface ComputerControlState {
+  agent_exe: { path: string; exists: boolean; size: number };   // windows-agent.exe desta máquina
   mode: 'package' | 'local';      // package = instalado pelo botão (uvx + release); local = pasta com o código
   installed_tag: string;
   package_exists: boolean;

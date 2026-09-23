@@ -225,6 +225,15 @@
           : m.computer_control_mode_local({ dir: current.project_dir })}
       </p>
       <p class="hint">{current.mode === 'package' ? m.computer_control_mode_package_hint() : m.computer_control_mode_local_hint()}</p>
+      {#if current.agent_exe.exists}
+        <p class="hint">{m.computer_control_agent_ok({ path: current.agent_exe.path, mb: (current.agent_exe.size / 1048576).toFixed(1) })}</p>
+      {:else}
+        <p class="err" role="alert">
+          {current.mode === 'package'
+            ? m.computer_control_agent_missing_package({ path: current.agent_exe.path })
+            : m.computer_control_agent_missing_local({ path: current.agent_exe.path })}
+        </p>
+      {/if}
       <button type="button" class="action" onclick={install} disabled={installing || saving} aria-busy={installing}>
         {installing ? m.computer_control_installing()
           : current.mode === 'package' ? m.computer_control_update() : m.computer_control_install()}

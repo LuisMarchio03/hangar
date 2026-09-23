@@ -335,7 +335,11 @@ def state() -> dict:
     targets = _targets(_where_targets(entry)[0])
     agents = [t["path"] for t in targets]
     install = _read(_install_dir() / "install.json")
+    agent_exe = _where_targets(entry)[1]
     return {
+        # O exe sai DAQUI até pro alvo remoto (copiado na 1ª conexão): sem ele, nenhum alvo funciona.
+        "agent_exe": {"path": str(agent_exe), "exists": agent_exe.is_file(),
+                      "size": agent_exe.stat().st_size if agent_exe.is_file() else 0},
         "mode": _mode(entry),
         "installed_tag": install.get("tag", ""),
         "package_exists": bool(install.get("tag")) and _package_exe().is_file(),
@@ -487,7 +491,7 @@ def install() -> dict:
     if _mode(before) == "local":
         for p in _local_project(before).glob("*-agent.json"):
             dest = targets / p.name
-            if dest.exists():
+            if dest.exists() or p.name == "exemplo-agent.json":   # modelo do repositório, não é máquina
                 continue
             try:
                 cfg = json.loads(p.read_text(encoding="utf-8"))
