@@ -325,7 +325,12 @@ function createSessionsStore() {
       return;
     }
     if (document.visibilityState !== 'visible') return;
-    for (const id of vivosAoEsconder) retentarAgora(id);
+    for (const id of vivosAoEsconder) {
+      const servidor = servers.find((x) => x.id === id);
+      if (servidor && estaDesligado(id)) registrarDiag({ evento: 'lista.reconectar', tela: 'lista',
+        codigo: 'vivo_ao_esconder' }, servidor.baseUrl);
+      retentarAgora(id);
+    }
     vivosAoEsconder = new Set();
     // Stream ZUMBI: o iOS suspende o PWA, o socket morre sem `onerror` e o EventSource continua no
     // mapa — como o `connect` só abre quem NÃO tem stream, ninguém o reabria, e o watchdog que
