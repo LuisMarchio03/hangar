@@ -3691,12 +3691,12 @@ class PairBody(_StrictBody):
     replace_task: bool = False
 
 
-def _group_text(me: str, others: list[str], task: str) -> str:
+def _group_text(me: str, others: list[str], task: str, harness: dict[str, str]) -> str:
     # Par remoto (srv::sessao): o contrato não sincroniza cross-server, então a linha dele some.
     # contract_path_for devolve None em sidecar legado sem gid — str(None) viraria "None" no prompt.
     cross = any(peers.is_remote(o) for o in others)
     caminho = None if cross else contract_path_for(me)
-    return pair_texto.texto_grupo(me, others, task, str(caminho) if caminho else None)
+    return pair_texto.texto_grupo(me, others, task, str(caminho) if caminho else None, harness)
 
 
 async def _deliver(name: str, text: str) -> dict | None:
@@ -3731,7 +3731,8 @@ async def pair_session(name: str, body: PairBody):
                                              "CP_SERVER_ID ausente no backend/.env — obrigatório pra "
                                              "pareamento cross-server (é o endereço de resposta srv::sessao)"))
         return await _pair_cross_server(name, others[0], body.task, body.replace_task)
-    names = {s.name for s in await asyncio.to_thread(registry.list)}
+    harness = {s.name: s.provider for s in await asyncio.to_thread(registry.list)}
+    names = set(harness)
     missing = [p for p in [name, *others] if p not in names]
     if missing:
         raise HTTPException(404, detail=erro("erro_sessao_nao_encontrada_detalhe", f"sessão não encontrada: {', '.join(missing)}", detalhe=", ".join(missing)))
@@ -3739,7 +3740,7 @@ async def pair_session(name: str, body: PairBody):
     # na janela entre elas entrava no grupo fora do snapshot e um rollback posterior não o
     # reverteria). O snapshot volta pra cá pra desfazer se o aviso não chegar em ninguém.
     try:
-        members, snap = await asyncio.to_thread(pair.join_group, name, others, body.task, substituir_task=body.replace_task)
+        members, snap = await asyncio.to_thread(pair.join_group, name, others, body.task, substituir_task=body.replace_task, harness=harness)
     except pair.PairMixError as e:
         # Uma das sessões locais já está pareada cross-server (1:1) — não dá pra fundir em grupo local.
         raise HTTPException(400, detail=erro("erro_pareamento_mistura_cross", str(e)))
@@ -3756,11 +3757,11 @@ async def pair_session(name: str, body: PairBody):
         antes = snap.get(m)
         outros = [x for x in members if x != m]
         if antes is None:
-            avisos.append((m, _group_text(m, outros, task)))
+            avisos.append((m, _group_text(m, outros, task, harness)))
             continue
         entraram = [x for x in outros if x not in antes["peers"]]
         if entraram:
-            avisos.append((m, pair_texto.texto_entrada(entraram, members, task)))
+            avisos.append((m, pair_texto.texto_entrada(entraram, members, task, harness)))
         elif antes.get("task", "") != task:
             avisos.append((m, pair_texto.texto_tarefa_atualizada(task)))
     errs = []
@@ -3788,12 +3789,12 @@ async def _pair_cross_server(name: str, peer: str, task: str, replace_task: bool
     sidecar do remoto vive na máquina dele) e chama o /pair-remote do backend peer pra registrar o
     reverso + injetar o protocolo lá. Falha na chamada remota desfaz o vínculo local (mesmo racional
     do 'grupo fantasma' do pair local). Transporte já provado pelo hangar-send cross-server (peers.json)."""
-    local_names = {s.name for s in await asyncio.to_thread(registry.list)}
-    if name not in local_names:
+    harness = {s.name: s.provider for s in await asyncio.to_thread(registry.list)}
+    if name not in harness:
         raise HTTPException(404, detail=erro("erro_sessao_nao_encontrada_detalhe", f"sessão não encontrada: {name}", detalhe=name))
     srv, sess = peers.split_addr(peer)
     try:
-        members, snap = await asyncio.to_thread(pair.join_group, name, [peer], task, substituir_task=replace_task)
+        members, snap = await asyncio.to_thread(pair.join_group, name, [peer], task, substituir_task=replace_task, harness=harness)
     except pair.PairMixError as e:
         # `name` já está num grupo local (ou já pareada cross-server): não dá pra cross-parear.
         raise HTTPException(400, detail=erro("erro_pareamento_mistura_cross", str(e)))
@@ -3827,7 +3828,7 @@ async def _pair_cross_server(name: str, peer: str, task: str, replace_task: bool
     # Reverso registrado. Injeta o protocolo NESTE lado; se este falhar (sessão morreu na janela), o
     # vínculo já vale dos dois lados — só avisa, não desfaz (o par remoto já sabe).
     warn = None
-    e = await _deliver(name, _group_text(name, [peer], task))
+    e = await _deliver(name, _group_text(name, [peer], task, harness))
     if e:
         warn = erro("erro_pareamento_aviso_local",
                     f"vínculo criado, mas o aviso local falhou ({name}: {_erro_texto(e)}) — refaça o pair se precisar",
@@ -3848,16 +3849,16 @@ async def pair_remote(name: str, body: PairRemoteBody):
     via peers.call, autenticado pelo token do peers.json."""
     if not peers.is_remote(body.initiator):
         raise HTTPException(400, detail=erro("erro_initiator_invalido", "initiator precisa ser qualificado (srv::nome)"))
-    local_names = {s.name for s in await asyncio.to_thread(registry.list)}
-    if name not in local_names:
+    harness = {s.name: s.provider for s in await asyncio.to_thread(registry.list)}
+    if name not in harness:
         raise HTTPException(404, detail=erro("erro_sessao_nao_encontrada_detalhe", f"sessão não encontrada: {name}", detalhe=name))
     try:
         # substituir_task=True: a task que chega aqui é a combinada do iniciador, sempre vence.
-        members, snap = await asyncio.to_thread(pair.join_group, name, [body.initiator], body.task, substituir_task=True)
+        members, snap = await asyncio.to_thread(pair.join_group, name, [body.initiator], body.task, substituir_task=True, harness=harness)
     except pair.PairMixError as e:
         # `name` já está num grupo local aqui — não pode virar par cross-server de outra máquina.
         raise HTTPException(409, detail=erro("erro_pareamento_mistura_cross", str(e)))
-    e = await _deliver(name, _group_text(name, [body.initiator], body.task))
+    e = await _deliver(name, _group_text(name, [body.initiator], body.task, harness))
     if e:
         await asyncio.to_thread(pair.restore, snap)
         raise HTTPException(502, detail=erro("erro_pareamento_aviso_falhou",
