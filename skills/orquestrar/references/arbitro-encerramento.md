@@ -108,3 +108,11 @@ Locks for every baton pass, any role:
 - The handover points at the closing items and at files; it restates nothing and never says "read the previous transcript".
 - Who leaves launches no subagent after deciding to leave and hands over only once each one it launched has returned.
 - Who arrives closes the session that left only when its handover reads `my running subagents: none`; otherwise it asks that session to wait them out first.
+
+### Succession without a handover
+
+The previous arbiter is gone and `<durable dir>/passagem.md` does not exist; you are the successor:
+
+1. Rebuild the handover from the files: the last lines of `eventos.jsonl` and of the journal, the sessions file, and `git status` of the main line and of every open Task's worktree. Write it to `<durable dir>/passagem.md` with the fields of step 2 above. Done when every open Task has its gate state, live sessions and uncommitted work named.
+2. `orq event sessao_trocada --de <previous> --para <you> --motivo <reason>`, then re-arm the watchdog over yourself. Done when its armed alarm reaches you.
+3. Replace every executor or reviewer of an open Task that is gone by `arbitro-vigia.md`, "A vanished session", naming the staged or frozen work in the replacement kick-off. Done when each open Task has a live pair and both recorded their wake-up.

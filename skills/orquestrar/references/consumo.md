@@ -21,6 +21,9 @@ uv run --directory <hangar>/backend --no-sync python -m app.orq_consumo snapshot
 
 - Capture before the first request; repeat at closing into `<name>-fim.json`. Check the exit
   code before recording the artifact.
+- A session a program opens: the program captures its start before the kick-off and its end
+  before closing it; where it does not, the arbiter captures the start at the session's wake-up
+  line and records the gap before it.
 - A session that already worked: the start marks only the observed period. Never invent a
   zeroed start.
 - Session, role or model changed: close the current pair and open another with new file names.

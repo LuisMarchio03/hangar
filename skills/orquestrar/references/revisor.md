@@ -38,8 +38,9 @@ Task) are noted.
    read. One you cannot find → `orq notify "[decisao] T<N>: <tool> missing, <what exists
    instead>"`, proceed.
    Correction round: judge the recipe's application and its proof yourself.
-3. The executor's `orq check` log is the verification of record when its object is the round's;
-   re-run only what you want to see yourself.
+3. The verification of record is the executor's `orq check` log plus the pasted output of each
+   command in the Task's Verification cell, both over the round's object; re-run a command whose
+   output is missing, and otherwise only what you want to see yourself.
 
 Done when the diff, the surrounding code and the tool outputs are read.
 
