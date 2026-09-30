@@ -106,6 +106,7 @@ chosen model has a card or a `## What they say` section.
      touching a public contract, shared state, destination or credential. Proposed with the team,
      decided by the user; it only ever rises.
    - Untouchables: paths with parallel changes in the tree, one by one.
+   - Modeled on existing code: name it, and which source wins where the two diverge.
    - Verification: focused command and its pass criterion; full suites → `Final verification:`
      line. Orchestration Task (tmux, CLI, process, account, network) → literal smoke step
      against the real source.

@@ -88,6 +88,8 @@ git merge --no-ff <work>-t2
   stop merging: git merges over uncommitted changes it does not touch, so merge only when
   `git status --porcelain --untracked-files=no` is empty. Only the reviewer's `APROVA`
   closes a gate.
+- A path left dirty on purpose at launch: take it out of that check in this checkout before
+  the first merge, and write its reversal in the closing items.
 - Batch done: trail check first — `grep -rl "<worktree path>" ~/.local/bin <agent config dirs>
   <service unit dir>` — then `git worktree remove` on each. No orphan worktree.
 

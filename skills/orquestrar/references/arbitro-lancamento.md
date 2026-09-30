@@ -86,6 +86,8 @@ Once at launch: subagents (per-language and per-dimension reviewers), skills (se
 
 Outside tool (skill, subagent, command): the three questions of `SKILL.md`'s locks, paths passed explicitly.
 
+A check the project's rules require: confirm it runs where each Task runs; absent → the contract says who runs it where, or that it is unavailable.
+
 ## Locks on model and tools
 
 - The model comes from the ROLE, including bug worktrees and one-off tasks.

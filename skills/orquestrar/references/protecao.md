@@ -52,6 +52,8 @@ git -C <new-sandbox> checkout --detach <object>
 - Check the copy's `HEAD` before testing; use the environment preparation the plan defines.
 - Never `git worktree add` from the protected checkout.
 - Only the copy receives the mutation; product and test fixes stay with the executor.
+- Each mutation starts from the round object: restore the file from the object and compare it
+  byte for byte before the next cut.
 - Copy results to the durable folder; remove only the sandbox this round created.
 
 ## Limits
